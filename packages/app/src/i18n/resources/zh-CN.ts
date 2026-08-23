@@ -1030,6 +1030,11 @@ export const zhCN: TranslationResources = {
         title: "标题",
         branch: "分支名称",
       },
+      projectWorkspaces: {
+        label: "项目工作区",
+        rows: "行",
+        compact: "紧凑",
+      },
       show: {
         label: "显示",
         branch: "分支",

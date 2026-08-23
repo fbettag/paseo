@@ -1063,6 +1063,11 @@ export const ptBR: TranslationResources = {
         title: "Título",
         branch: "Nome da branch",
       },
+      projectWorkspaces: {
+        label: "Espaços de trabalho do projeto",
+        rows: "Linhas",
+        compact: "Compactos",
+      },
       show: {
         label: "Mostrar",
         branch: "Branch",

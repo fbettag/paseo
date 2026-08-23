@@ -1038,6 +1038,11 @@ export const ar: TranslationResources = {
         title: "العنوان",
         branch: "اسم الفرع",
       },
+      projectWorkspaces: {
+        label: "مساحات عمل المشروع",
+        rows: "صفوف",
+        compact: "مضغوطة",
+      },
       show: {
         label: "إظهار",
         branch: "الفرع",
