@@ -33,6 +33,7 @@ import { runWithGitCommandPriority } from "../utils/run-git-command.js";
 export interface CreatePaseoWorktreeInput extends CreateWorktreeCoreInput {
   projectId?: string;
   title?: string;
+  scheduleId?: string;
 }
 
 export interface CreatePaseoWorktreeResult {
@@ -111,6 +112,7 @@ async function createPaseoWorktreeWithPriority(
             },
           }
         : {}),
+      scheduleId: input.scheduleId,
     });
 
     deps.github.invalidate({ cwd: createdWorktree.worktree.worktreePath });

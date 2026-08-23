@@ -424,16 +424,17 @@ One file per schedule. ID is 8 hex characters.
 
 ### Nested: ScheduleRun
 
-| Field          | Type                                   | Description             |
-| -------------- | -------------------------------------- | ----------------------- |
-| `id`           | `string`                               | Run ID                  |
-| `scheduledFor` | `string` (ISO 8601)                    | Intended execution time |
-| `startedAt`    | `string` (ISO 8601)                    |                         |
-| `endedAt`      | `string?` (ISO 8601)                   |                         |
-| `status`       | `"running" \| "succeeded" \| "failed"` |                         |
-| `agentId`      | `string?` (UUID)                       | Agent used for this run |
-| `output`       | `string?`                              | Agent output text       |
-| `error`        | `string?`                              | Error message if failed |
+| Field          | Type                                   | Description                    |
+| -------------- | -------------------------------------- | ------------------------------ |
+| `id`           | `string`                               | Run ID                         |
+| `scheduledFor` | `string` (ISO 8601)                    | Intended execution time        |
+| `startedAt`    | `string` (ISO 8601)                    |                                |
+| `endedAt`      | `string?` (ISO 8601)                   |                                |
+| `status`       | `"running" \| "succeeded" \| "failed"` |                                |
+| `agentId`      | `string?` (UUID)                       | Agent used for this run        |
+| `workspaceId`  | `string?`                              | Workspace created for this run |
+| `output`       | `string?`                              | Agent output text              |
+| `error`        | `string?`                              | Error message if failed        |
 
 ---
 
@@ -498,6 +499,7 @@ Array of workspace records. A workspace is a specific working directory within a
 | `labels`                       | `string[]?`                                                  | Normalized display names assigned from this host's shared label catalog. Missing means unlabelled.                                                                                            |
 | `pinnedAt`                     | `string \| null` (ISO 8601)                                  | Pinned-to-top-of-sidebar timestamp; null means "not pinned"                                                                                                                                   |
 | `untrustedSource`              | `{ kind: "change_request", forge, number, headRepository }?` | Provenance captured when a cross-repository change request creates the workspace. Missing means repository automation is allowed; explicit setup removes the field.                           |
+| `scheduleId`                   | `string?`                                                    | Schedule that created the workspace. Startup reconciliation restores this from retained run history for records written before the field existed.                                             |
 
 > **Opaque-ID invariant:** `workspaceId` is opaque identity, never a filesystem path. Filesystem and git operations take `cwd`/`workspaceDirectory` only — never the id. A compatibility-only first-materialization bootstrap still groups pre-registry agent records by path and Git remote so existing installs retain their legacy records. That grouping never runs against a live registry, and its keys are not runtime project or workspace identity.
 

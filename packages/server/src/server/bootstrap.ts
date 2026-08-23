@@ -1270,10 +1270,13 @@ export async function createPaseoDaemon(
   const createScheduleLocalWorkspaceExternal = async (input: {
     cwd: string;
     firstAgentContext: FirstAgentContext;
+    scheduleId: string;
   }) => {
     const workspace = await workspaceProvisioning.createWorkspaceForDirectory(
       input.cwd,
       resolveFirstAgentPromptTitle(input.firstAgentContext),
+      undefined,
+      { scheduleId: input.scheduleId },
     );
     workspaceAutoName.scheduleForDirectory({
       workspaceId: workspace.workspaceId,
@@ -1286,10 +1289,12 @@ export async function createPaseoDaemon(
   const createSchedulePaseoWorktreeExternal = async (input: {
     cwd: string;
     firstAgentContext: FirstAgentContext;
+    scheduleId: string;
   }) => {
     const result = await createPaseoWorktreeForTools({
       cwd: input.cwd,
       firstAgentContext: input.firstAgentContext,
+      scheduleId: input.scheduleId,
     });
     await emitWorkspaceUpdatesExternal([result.workspace.workspaceId]);
     return result;
@@ -1338,6 +1343,14 @@ export async function createPaseoDaemon(
     createDirectoryWorkspace: createScheduleLocalWorkspaceExternal,
     createPaseoWorktreeWorkspace: createSchedulePaseoWorktreeExternal,
     archiveWorkspace: archiveScheduleWorkspaceExternal,
+    setWorkspaceScheduleId: async (workspaceId, scheduleId) => {
+      const workspace = await workspaceRegistry.get(workspaceId);
+      if (!workspace || workspace.scheduleId === scheduleId) return;
+      await workspaceRegistry.update(workspaceId, (current) => ({
+        ...current,
+        scheduleId,
+      }));
+    },
   });
   await scheduleService.start();
   agentManager.setAgentArchivedCallback(async (agentId) => {
