@@ -102,6 +102,8 @@ const PersistedWorkspaceRecordSchema = z.object({
     .nullable()
     .optional()
     .transform((value) => value ?? null),
+  // COMPAT(scheduleWorkspaceIdentity): added in v0.6.2, remove optional parsing after 2027-08-27.
+  scheduleId: z.string().optional(),
   labels: z.array(z.string()).optional(),
   // Plugin-owned data. Paseo stores it and never reads a key.
   metadata: z.record(z.string(), z.custom<JsonValue>()).default({}),
@@ -700,6 +702,7 @@ export function createPersistedWorkspaceRecord(input: {
   archivedAt?: string | null;
   autoArchivedChangeRequestUrl?: string | null;
   pinnedAt?: string | null;
+  scheduleId?: string;
   labels?: string[];
   metadata?: Record<string, JsonValue>;
   untrustedSource?: UntrustedWorkspaceSource;
@@ -718,6 +721,7 @@ export function createPersistedWorkspaceRecord(input: {
     archivedAt: input.archivedAt ?? null,
     autoArchivedChangeRequestUrl: input.autoArchivedChangeRequestUrl ?? null,
     pinnedAt: input.pinnedAt ?? null,
+    scheduleId: input.scheduleId,
   });
 }
 

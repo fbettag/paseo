@@ -2,6 +2,7 @@ import type { WorkspaceSort } from "@/projects/workspace-structure";
 import { useCallback, useMemo } from "react";
 import {
   useAppSettings,
+  type SidebarProjectWorkspaceDisplay,
   type SidebarWorkspaceTrailing,
   type WorkspaceTitleSource,
 } from "@/hooks/use-settings";
@@ -31,6 +32,8 @@ export interface SidebarDisplayPreferences {
   setGrouping: (mode: SidebarGroupMode) => void;
   titleSource: WorkspaceTitleSource;
   setTitleSource: (source: WorkspaceTitleSource) => void;
+  projectWorkspaceDisplay: SidebarProjectWorkspaceDisplay;
+  setProjectWorkspaceDisplay: (display: SidebarProjectWorkspaceDisplay) => void;
   rowItems: SidebarRowItems;
   toggleRowItem: (item: SidebarRowItem) => void;
   /** Workspace row badge items contributed by installed plugins, one per plugin item across hosts. */
@@ -82,6 +85,7 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   const {
     settings: {
       workspaceTitleSource,
+      sidebarProjectWorkspaceDisplay,
       sidebarWorkspaceTrailing,
       sidebarRowItems,
       sidebarChecksDisplay,
@@ -113,6 +117,13 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
   const setTitleSource = useCallback(
     (source: WorkspaceTitleSource) => {
       void updateSettings({ workspaceTitleSource: source });
+    },
+    [updateSettings],
+  );
+
+  const setProjectWorkspaceDisplay = useCallback(
+    (display: SidebarProjectWorkspaceDisplay) => {
+      void updateSettings({ sidebarProjectWorkspaceDisplay: display });
     },
     [updateSettings],
   );
@@ -152,6 +163,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       setGrouping,
       titleSource: workspaceTitleSource,
       setTitleSource,
+      projectWorkspaceDisplay: sidebarProjectWorkspaceDisplay,
+      setProjectWorkspaceDisplay,
       rowItems: sidebarRowItems,
       toggleRowItem,
       pluginRowBadgeItems,
@@ -180,6 +193,8 @@ export function useSidebarDisplayPreferences(): SidebarDisplayPreferences {
       setGrouping,
       workspaceTitleSource,
       setTitleSource,
+      sidebarProjectWorkspaceDisplay,
+      setProjectWorkspaceDisplay,
       sidebarRowItems,
       toggleRowItem,
       pluginRowBadgeItems,
