@@ -180,7 +180,7 @@ export const SidebarWorkspaceRowContent = memo(function SidebarWorkspaceRowConte
   );
 });
 
-function WorkspaceStatusIndicator({
+export function WorkspaceStatusIndicator({
   bucket,
   workspaceKind,
   loading = false,
