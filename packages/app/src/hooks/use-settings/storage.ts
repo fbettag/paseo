@@ -18,6 +18,10 @@ import {
   isChecksHiddenByLegacyRowItem,
   type SidebarRowItems,
 } from "@/components/sidebar/display-preferences/row-items";
+import {
+  DEFAULT_SIDEBAR_PROJECT_WORKSPACE_DISPLAY,
+  type SidebarProjectWorkspaceDisplay,
+} from "@/components/sidebar/display-preferences/project-workspaces";
 import { isNative } from "@/constants/platform";
 import {
   DEFAULT_CONTENT_MAX_WIDTH,
@@ -31,6 +35,7 @@ import { APP_SETTINGS_KEY, LEGACY_SETTINGS_KEY } from "./keys";
 import { migrateAppSettings } from "./migrations";
 
 export { APP_SETTINGS_KEY } from "./keys";
+export type { SidebarProjectWorkspaceDisplay } from "@/components/sidebar/display-preferences/project-workspaces";
 export const APP_SETTINGS_QUERY_KEY = ["app-settings"];
 
 export type SendBehavior = ActiveTurnBehavior | "queue";
@@ -92,6 +97,7 @@ export interface AppSettings {
   syntaxTheme: SyntaxThemeId; // default "one"
   workspaceTitleSource: WorkspaceTitleSource;
   sidebarWorkspaceTrailing: SidebarWorkspaceTrailing;
+  sidebarProjectWorkspaceDisplay: SidebarProjectWorkspaceDisplay;
   sidebarRowItems: SidebarRowItems;
   sidebarChecksDisplay: SidebarChecksDisplay;
   /** Top-level sidebar rows in display order; empty means the default order, all visible. */
@@ -151,6 +157,7 @@ export const DEFAULT_CLIENT_SETTINGS: AppSettings = {
   syntaxTheme: "one",
   workspaceTitleSource: "title",
   sidebarWorkspaceTrailing: "diff",
+  sidebarProjectWorkspaceDisplay: DEFAULT_SIDEBAR_PROJECT_WORKSPACE_DISPLAY,
   sidebarRowItems: DEFAULT_SIDEBAR_ROW_ITEMS,
   sidebarChecksDisplay: DEFAULT_SIDEBAR_CHECKS_DISPLAY,
   sidebarNavItems: [],
@@ -243,6 +250,9 @@ const StoredAppSettingsSchema = z
     syntaxTheme: z.string().refine(isSyntaxThemeId).catch("one"),
     workspaceTitleSource: z.enum(["title", "branch"]).catch("title"),
     sidebarWorkspaceTrailing: z.enum(["diff", "timestamp", "none"]).catch("diff"),
+    sidebarProjectWorkspaceDisplay: z
+      .enum(["rows", "compact"])
+      .catch(DEFAULT_SIDEBAR_PROJECT_WORKSPACE_DISPLAY),
     sidebarRowItems: SidebarRowItemsSchema,
     sidebarChecksDisplay: z
       .enum(["iconAndText", "icon", "none"])

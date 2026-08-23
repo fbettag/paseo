@@ -78,7 +78,11 @@ let workspaceArchiveInProgress = false;
 
 type TestScheduleServiceOptions = Omit<
   ScheduleServiceOptions,
-  "createAgent" | "createDirectoryWorkspace" | "createPaseoWorktreeWorkspace" | "archiveWorkspace"
+  | "createAgent"
+  | "createDirectoryWorkspace"
+  | "createPaseoWorktreeWorkspace"
+  | "archiveWorkspace"
+  | "setWorkspaceScheduleId"
 > & {
   agentManager: AgentManager;
   providerSnapshotManager: Pick<ProviderSnapshotManager, "resolveCreateConfig">;
@@ -86,6 +90,7 @@ type TestScheduleServiceOptions = Omit<
   createDirectoryWorkspace?: ScheduleServiceOptions["createDirectoryWorkspace"];
   createPaseoWorktreeWorkspace?: ScheduleServiceOptions["createPaseoWorktreeWorkspace"];
   archiveWorkspace?: ScheduleServiceOptions["archiveWorkspace"];
+  setWorkspaceScheduleId?: ScheduleServiceOptions["setWorkspaceScheduleId"];
 };
 
 function createScheduleService(options: TestScheduleServiceOptions): ScheduleService {
@@ -104,6 +109,7 @@ function createScheduleService(options: TestScheduleServiceOptions): ScheduleSer
       kind: "directory",
       displayName: "test-project",
       title: input.firstAgentContext.prompt,
+      scheduleId: input.scheduleId,
       branch: null,
       baseBranch: null,
       createdAt: timestamp,
@@ -185,6 +191,12 @@ function createScheduleService(options: TestScheduleServiceOptions): ScheduleSer
         };
       }),
     archiveWorkspace: options.archiveWorkspace ?? archiveDefaultWorkspace,
+    setWorkspaceScheduleId:
+      options.setWorkspaceScheduleId ??
+      (async (workspaceId, scheduleId) => {
+        const workspace = workspaces.get(workspaceId);
+        if (workspace) workspaces.set(workspaceId, { ...workspace, scheduleId });
+      }),
   });
 }
 
@@ -220,6 +232,8 @@ async function createRegistryBackedScheduleWorkspaceDeps(rootDir: string): Promi
       return workspaceProvisioning.createWorkspaceForDirectory(
         input.cwd,
         input.firstAgentContext.prompt,
+        undefined,
+        { scheduleId: input.scheduleId },
       );
     },
     createArchiveWorkspace:
@@ -632,11 +646,13 @@ describe("ScheduleService", () => {
         workspaceId: firstAgent?.workspaceId,
         cwd: tempDir,
         archivedAt: null,
+        scheduleId: created.id,
       }),
       expect.objectContaining({
         workspaceId: secondAgent?.workspaceId,
         cwd: tempDir,
         archivedAt: null,
+        scheduleId: created.id,
       }),
     ]);
   });
@@ -1944,6 +1960,59 @@ describe("ScheduleService", () => {
     await service2.start();
 
     expect((await service2.list()).map((schedule) => schedule.id)).toEqual([created.id]);
+    await service2.stop();
+  });
+
+  test("restores schedule identity on existing run workspaces at startup", async () => {
+    const service1 = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner: async () => ({ agentId: null, output: "ok" }),
+    });
+    const created = await service1.create({
+      prompt: "Retained run",
+      cadence: { type: "every", everyMs: 60_000 },
+      target: { type: "new-agent", config: { provider: "claude", cwd: tempDir } },
+      runOnCreate: false,
+    });
+    const workspaceId = "wks_existing_schedule_run";
+    const store = new ScheduleStore(join(tempDir, "schedules"));
+    await store.update(created.id, (schedule) => ({
+      ...schedule,
+      runs: [
+        {
+          id: "existing-run",
+          scheduledFor: now.toISOString(),
+          startedAt: now.toISOString(),
+          endedAt: now.toISOString(),
+          status: "succeeded",
+          agentId: null,
+          workspaceId,
+          output: "ok",
+          error: null,
+        },
+      ],
+    }));
+    await service1.stop();
+
+    const setWorkspaceScheduleId = vi.fn(async () => undefined);
+    const service2 = createScheduleService({
+      paseoHome: tempDir,
+      logger: createTestLogger(),
+      agentManager: new AgentManager({ logger: createTestLogger() }),
+      agentStorage,
+      providerSnapshotManager: NO_UNATTENDED_SCHEDULE_POLICY,
+      now: () => now,
+      runner: async () => ({ agentId: null, output: "ok" }),
+      setWorkspaceScheduleId,
+    });
+    await service2.start();
+
+    expect(setWorkspaceScheduleId).toHaveBeenCalledWith(workspaceId, created.id);
     await service2.stop();
   });
 

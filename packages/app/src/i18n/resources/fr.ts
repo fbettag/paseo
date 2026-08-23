@@ -1136,6 +1136,11 @@ export const fr: TranslationResources = {
         title: "Titre",
         branch: "Nom de branche",
       },
+      projectWorkspaces: {
+        label: "Espaces de travail du projet",
+        rows: "Lignes",
+        compact: "Compacts",
+      },
       show: {
         label: "Afficher",
         branch: "Branche",

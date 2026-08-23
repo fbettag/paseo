@@ -33,6 +33,7 @@ export interface CreatePaseoWorktreeInput extends CreateWorktreeCoreInput {
   workspaceId?: string;
   projectId?: string;
   title?: string;
+  scheduleId?: string;
 }
 
 export interface CreatePaseoWorktreeResult {
@@ -112,6 +113,7 @@ async function createPaseoWorktreeWithPriority(
             },
           }
         : {}),
+      scheduleId: input.scheduleId,
     });
 
     deps.github.invalidate({ cwd: createdWorktree.worktree.worktreePath });
