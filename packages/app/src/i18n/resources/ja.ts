@@ -1112,6 +1112,11 @@ export const ja: TranslationResources = {
         title: "タイトル",
         branch: "ブランチ名",
       },
+      projectWorkspaces: {
+        label: "プロジェクトのワークスペース",
+        rows: "行",
+        compact: "コンパクト",
+      },
       show: {
         label: "表示項目",
         branch: "ブランチ",
