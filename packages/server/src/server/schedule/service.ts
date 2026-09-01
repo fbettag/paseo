@@ -283,7 +283,9 @@ export class ScheduleService {
   }
 
   async start(): Promise<void> {
-    await this.reconcileScheduleWorkspaceIds();
+    void this.reconcileScheduleWorkspaceIds().catch((error) => {
+      this.logger.warn({ err: error }, "Failed to reconcile schedule workspace IDs");
+    });
     await this.recoverInterruptedRuns();
     await this.sweepOrphanedSchedules();
     if (this.tickTimer) {
