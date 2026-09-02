@@ -66,7 +66,12 @@ export function buildCompactProjectWorkspaceTargets(input: {
     const statusCandidates = group.workspaces.filter(
       (workspace) => workspace.statusBucket === statusBucket,
     );
-    const workspace = selectedWorkspace ?? pickLatest(statusCandidates);
+    // Compact indicators show one aggregated status; the click target has to be
+    // a workspace that actually has that status, not merely the selected one.
+    const workspace =
+      selectedWorkspace?.statusBucket === statusBucket
+        ? selectedWorkspace
+        : pickLatest(statusCandidates);
     return {
       key: group.key,
       workspace,
