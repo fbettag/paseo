@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { getServerId } from "./server-id";
 
 interface ContextMenuAnchor {
@@ -198,6 +198,64 @@ export async function closeSidebarDisplayPreferences(page: Page): Promise<void> 
 export async function selectSidebarStatusGrouping(page: Page): Promise<void> {
   await openSidebarDisplayPage(page, "sidebar-display-grouping");
   await page.getByTestId("sidebar-grouping-status").click();
+}
+
+export async function selectSidebarProjectWorkspaceDisplay(
+  page: Page,
+  display: "rows" | "compact",
+): Promise<void> {
+  await openSidebarDisplayPage(page, "sidebar-display-project-workspaces");
+  await page.getByTestId(`sidebar-project-workspace-display-${display}`).click();
+  await closeSidebarDisplayPreferences(page);
+}
+
+export function sidebarWorkspaceRow(page: Page, workspaceId: string): Locator {
+  return page.getByTestId(`sidebar-workspace-row-${getServerId()}:${workspaceId}`);
+}
+
+export function compactProjectWorkspaceTarget(
+  page: Page,
+  projectViewKey: string,
+  kind: "work" | "schedule",
+): Locator {
+  return page.getByTestId(`sidebar-project-workspace-target-project:${projectViewKey}:${kind}`);
+}
+
+export async function expectSidebarWorkspaceRows(
+  page: Page,
+  workspaceIds: readonly string[],
+): Promise<void> {
+  for (const workspaceId of workspaceIds) {
+    await expect(sidebarWorkspaceRow(page, workspaceId)).toBeVisible({ timeout: 30_000 });
+  }
+}
+
+export async function expectCompactProjectWorkspaceTargets(
+  page: Page,
+  input: { projectViewKey: string; workspaceIds: readonly string[] },
+): Promise<void> {
+  for (const workspaceId of input.workspaceIds) {
+    await expect(sidebarWorkspaceRow(page, workspaceId)).toHaveCount(0);
+  }
+  await expect(compactProjectWorkspaceTarget(page, input.projectViewKey, "work")).toHaveCount(1, {
+    timeout: 30_000,
+  });
+  await expect(compactProjectWorkspaceTarget(page, input.projectViewKey, "schedule")).toHaveCount(
+    1,
+    { timeout: 30_000 },
+  );
+}
+
+export async function expectCompactProjectWorkspaceTooltip(
+  page: Page,
+  input: { projectViewKey: string; kind: "work" | "schedule"; title: string },
+): Promise<void> {
+  await compactProjectWorkspaceTarget(page, input.projectViewKey, input.kind).hover();
+  await expect(
+    page.getByTestId(
+      `sidebar-project-workspace-tooltip-project:${input.projectViewKey}:${input.kind}`,
+    ),
+  ).toHaveText(input.title);
 }
 
 export async function openMobileAgentSidebar(page: Page): Promise<void> {

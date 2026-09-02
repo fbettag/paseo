@@ -79,7 +79,7 @@ describe("compact project workspace targets", () => {
     });
   });
 
-  it("keeps the selected run as the grouped navigation target", () => {
+  it("navigates to the workspace that owns the aggregated status", () => {
     const selectedRun = workspace({
       workspaceKey: "host-a:run-old",
       workspaceId: "run-old",
@@ -96,6 +96,34 @@ describe("compact project workspace targets", () => {
 
     const [target] = buildCompactProjectWorkspaceTargets({
       workspaces: [selectedRun, runningRun],
+      selection: { serverId: "host-a", workspaceId: selectedRun.workspaceId },
+    });
+
+    expect(target).toMatchObject({
+      workspace: runningRun,
+      statusBucket: "running",
+      selected: true,
+    });
+  });
+
+  it("keeps the selected workspace when it owns the aggregated status", () => {
+    const selectedRun = workspace({
+      workspaceKey: "host-a:run-selected",
+      workspaceId: "run-selected",
+      scheduleId: "schedule-1",
+      statusBucket: "running",
+      statusEnteredAt: new Date("2026-08-25T10:00:00.000Z"),
+    });
+    const olderRun = workspace({
+      workspaceKey: "host-a:run-old",
+      workspaceId: "run-old",
+      scheduleId: "schedule-1",
+      statusBucket: "running",
+      statusEnteredAt: new Date("2026-08-24T10:00:00.000Z"),
+    });
+
+    const [target] = buildCompactProjectWorkspaceTargets({
+      workspaces: [selectedRun, olderRun],
       selection: { serverId: "host-a", workspaceId: selectedRun.workspaceId },
     });
 
