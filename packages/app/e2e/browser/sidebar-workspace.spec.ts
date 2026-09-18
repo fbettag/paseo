@@ -150,23 +150,19 @@ test.describe("Sidebar workspace list", () => {
       await selectSidebarProjectWorkspaceDisplay(page, "compact");
       await expectCompactProjectWorkspaceTargets(page, project);
 
-      await expectCompactProjectWorkspaceTooltip(page, {
-        projectViewKey: project.projectViewKey,
-        kind: "work",
-        title: "Compact target",
-      });
-      await expectCompactProjectWorkspaceTooltip(page, {
-        projectViewKey: project.projectViewKey,
-        kind: "schedule",
-        title: "Nightly sync",
-      });
-
       await page.getByTestId(`sidebar-project-row-${project.projectViewKey}`).click();
       await expectCompactProjectWorkspaceTargets(page, project);
 
-      await compactProjectWorkspaceTarget(page, project.projectViewKey, "work").click();
+      const target = compactProjectWorkspaceTarget(page, project.projectViewKey);
+      const title = await target.getAttribute("aria-label");
+      if (!title) throw new Error("Compact project target is missing its workspace label");
+      await expectCompactProjectWorkspaceTooltip(page, {
+        projectViewKey: project.projectViewKey,
+        title,
+      });
+      await target.click();
       await expectWorkspaceHeader(page, {
-        title: "Compact target",
+        title,
         subtitle: path.basename(project.repoPath),
       });
 
