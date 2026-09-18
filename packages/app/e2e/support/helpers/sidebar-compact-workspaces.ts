@@ -41,7 +41,7 @@ async function runScheduleOnce(client: SidebarScheduleClient, scheduleId: string
 
 /**
  * Seeds a project with two ordinary workspaces and two retained schedule runs so
- * compact sidebar mode has both a work target and a schedule target to collapse.
+ * compact sidebar mode has one aggregated status target for the project.
  */
 export async function seedCompactProjectWorkspaces(): Promise<CompactProjectWorkspaces> {
   const seeded = await seedWorkspace({ repoPrefix: "sidebar-compact-workspaces-" });
