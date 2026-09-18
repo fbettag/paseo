@@ -5244,7 +5244,14 @@ export class AgentManager {
     return async (snapshots) => {
       const client = policy.createClient?.() ?? null;
       if (!client) {
-        return { considered: snapshots.length, scored: 0, keep: 0, drop: 0, droppedChars: 0 };
+        return {
+          considered: snapshots.length,
+          scored: 0,
+          keep: 0,
+          drop: 0,
+          droppedChars: 0,
+          decisions: [],
+        };
       }
       return scoreCompactToolHistory(client, snapshots, logger);
     };

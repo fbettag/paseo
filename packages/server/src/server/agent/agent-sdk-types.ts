@@ -650,6 +650,13 @@ export interface AgentLaunchContext {
     keep: number;
     drop: number;
     droppedChars: number;
+    decisions?: Array<{
+      itemId: string;
+      command: string;
+      resultChars: number;
+      noul: number;
+      decision: "keep" | "drop";
+    }>;
   }>;
 }
 

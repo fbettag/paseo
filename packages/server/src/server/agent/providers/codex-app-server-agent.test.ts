@@ -5013,6 +5013,121 @@ describe("Codex app-server provider", () => {
     ]);
   });
 
+  test("rewrites Codex history for dropped Jev compact results instead of native compact", async () => {
+    const previousHome = process.env.CODEX_HOME;
+    const root = await mkdtemp(path.join(tmpdir(), "jev-codex-home-"));
+    process.env.CODEX_HOME = root;
+    try {
+      const sessionId = "test-thread";
+      const dir = path.join(root, "sessions", "2026", "09", "18");
+      mkdirSync(dir, { recursive: true });
+      const filePath = path.join(dir, `rollout-2026-09-18T14-02-58-${sessionId}.jsonl`);
+      writeFileSync(
+        filePath,
+        [
+          JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "custom_tool_call",
+              call_id: "call_drop",
+              name: "exec",
+              input: 'const a = await tools.exec_command({"cmd":"seq 1 800"});',
+            },
+          }),
+          JSON.stringify({
+            type: "response_item",
+            payload: {
+              type: "custom_tool_call_output",
+              call_id: "call_drop",
+              output: "x".repeat(500),
+            },
+          }),
+        ].join("\n"),
+      );
+
+      const session = new CodexAppServerAgentSession(
+        createConfig(),
+        null,
+        createTestLogger(),
+        () => {
+          throw new Error("Test session cannot spawn Codex app-server");
+        },
+        {
+          jevCompact: async () => ({
+            considered: 1,
+            scored: 1,
+            keep: 0,
+            drop: 1,
+            droppedChars: 500,
+            decisions: [
+              {
+                itemId: "exec-1",
+                command: "seq 1 800",
+                resultChars: 500,
+                noul: 0.1,
+                decision: "drop",
+              },
+            ],
+          }),
+        },
+      ) as CodexTestSession;
+      session.connected = true;
+      session.currentThreadId = sessionId;
+      session.activeForegroundTurnId = "test-turn";
+      const requests: Array<{ method: string; params: unknown }> = [];
+      session.client = {
+        request: vi.fn(async (method: string, params: unknown) => {
+          requests.push({ method, params });
+          if (method === "thread/loaded/list") {
+            return { data: [sessionId] };
+          }
+          return {};
+        }),
+      };
+      castInternals<{ reloadCodexProcessPreservingThread: () => Promise<void> }>(
+        session,
+      ).reloadCodexProcessPreservingThread = async () => {};
+
+      const handler = session.tryHandleOutOfBand?.("/compact");
+      expect(handler).not.toBeNull();
+      const events: AgentStreamEvent[] = [];
+      session.subscribe((event) => events.push(event));
+      await handler?.run({ emit: (event) => events.push(event) });
+
+      expect(requests).not.toContainEqual({
+        method: "thread/compact/start",
+        params: { threadId: sessionId },
+      });
+      expect(readFileSync(filePath, "utf8")).toContain("omitted by Jev");
+      expect(events).toEqual([
+        {
+          type: "timeline",
+          provider: "codex",
+          turnId: "test-turn",
+          item: {
+            type: "compaction",
+            status: "completed",
+            trigger: "manual",
+          },
+        },
+        {
+          type: "timeline",
+          provider: "codex",
+          item: {
+            type: "assistant_message",
+            text: "Jev compact: drop 1/1 shell results (500 chars), keep 0. Codex history rewritten.\n\n",
+          },
+        },
+      ]);
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousHome;
+      }
+    }
+  });
+
   test("maps question responses from headers back to question ids and completes the tool call", async () => {
     const session = createSession();
     const events: AgentStreamEvent[] = [];

@@ -112,7 +112,9 @@ import {
 } from "./codex/options.js";
 import {
   collectCompactToolSnapshots,
+  findCodexRolloutFile,
   formatJevCompactStatus,
+  rewriteCodexRolloutFile,
   snapshotFromCommandExecutionItem,
   type CompactToolSnapshot,
 } from "../../jev/compact-tool-history.js";
@@ -5031,6 +5033,15 @@ export class CodexAppServerAgentSession implements AgentSession {
       this.pendingManualCompactionStarts += 1;
       try {
         const score = await this.scoreJevCompact("manual");
+        const applied = await this.applyJevCompactToCodexHistory(score);
+        if (applied) {
+          this.emitEvent({
+            type: "timeline",
+            provider: CODEX_PROVIDER,
+            item: this.createContextCompactionTimelineItem("completed"),
+          });
+          return score ? formatJevCompactStatus(score, { applied: true }) : null;
+        }
         await this.client.request("thread/compact/start", {
           threadId: this.currentThreadId,
         });
@@ -5051,6 +5062,13 @@ export class CodexAppServerAgentSession implements AgentSession {
     keep: number;
     drop: number;
     droppedChars: number;
+    decisions?: Array<{
+      itemId: string;
+      command: string;
+      resultChars: number;
+      noul: number;
+      decision: "keep" | "drop";
+    }>;
   } | null> {
     if (!this.deps.jevCompact) return null;
     let snapshots = this.jevCompactJournal;
@@ -5075,10 +5093,75 @@ export class CodexAppServerAgentSession implements AgentSession {
         keep: score.keep,
         drop: score.drop,
         droppedChars: score.droppedChars,
+        decisions: score.decisions?.map((decision) => ({
+          itemId: decision.itemId,
+          command: decision.command,
+          noul: decision.noul,
+          decision: decision.decision,
+          resultChars: decision.resultChars,
+        })),
       },
       "Jev compact scored",
     );
     return score;
+  }
+
+  private async applyJevCompactToCodexHistory(
+    score: {
+      drop: number;
+      decisions?: Array<{
+        itemId: string;
+        command: string;
+        resultChars: number;
+        noul: number;
+        decision: "keep" | "drop";
+      }>;
+    } | null,
+  ): Promise<boolean> {
+    if (!score || score.drop <= 0 || !score.decisions || score.decisions.length === 0) {
+      return false;
+    }
+    const threadId = this.currentThreadId;
+    if (!threadId) return false;
+    const rolloutPath = findCodexRolloutFile(resolveCodexHomeDir(), threadId);
+    if (!rolloutPath) {
+      this.logger.warn({ threadId }, "Jev compact rollout not found");
+      return false;
+    }
+    const rewritten = rewriteCodexRolloutFile(rolloutPath, score.decisions);
+    if (rewritten.applied === 0) {
+      this.logger.info({ threadId, rolloutPath }, "Jev compact found no matching rollout outputs");
+      return false;
+    }
+    try {
+      await this.reloadCodexProcessPreservingThread();
+    } catch (error) {
+      this.logger.warn({ err: error, threadId, rolloutPath }, "Jev compact reload failed");
+      if (!this.connected) {
+        await this.connect();
+      }
+      return false;
+    }
+    this.logger.info(
+      {
+        threadId,
+        rolloutPath,
+        applied: rewritten.applied,
+        droppedChars: rewritten.droppedChars,
+      },
+      "Jev compact applied to Codex history",
+    );
+    return true;
+  }
+
+  private async reloadCodexProcessPreservingThread(): Promise<void> {
+    const threadId = this.currentThreadId;
+    if (!threadId) {
+      throw new Error("Codex thread is not available");
+    }
+    await this.disposeClient();
+    this.currentThreadId = threadId;
+    await this.connect();
   }
 
   private async executeGoalSubcommand(subcommand: GoalSubcommand): Promise<string> {
