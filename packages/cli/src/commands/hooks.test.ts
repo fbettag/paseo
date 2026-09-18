@@ -175,4 +175,14 @@ describe("runHooksCommand", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("does not post terminal activity for jev hooks", async () => {
+    const send = createFetch();
+    await runHooksCommand("jev", "PostToolUse", {
+      env: hookEnv,
+      input: inputFrom(JSON.stringify({ tool_name: "Bash", tool_response: "short" })),
+      fetch: send.send,
+    });
+    expect(send.calls).toEqual([]);
+  });
 });

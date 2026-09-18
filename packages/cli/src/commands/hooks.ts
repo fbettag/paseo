@@ -1,10 +1,12 @@
 import { Command } from "commander";
 import { resolveHookActivity, type AgentHookActivityState } from "@getpaseo/server/agent-hooks";
+import { runJevPostToolHook } from "./hooks-jev.js";
 
 interface HookEnvironment {
   PASEO_TERMINAL_ID?: string;
   PASEO_ACTIVITY_TOKEN?: string;
   PASEO_TERMINAL_ACTIVITY_URL?: string;
+  [key: string]: string | undefined;
 }
 
 interface HookInput {
@@ -35,6 +37,10 @@ export async function runHooksCommand(
     fetch,
   },
 ): Promise<void> {
+  if (agent === "jev") {
+    await runJevPostToolHook(event, runtime);
+    return;
+  }
   const target = resolveTarget(runtime.env);
   if (!target) return;
 

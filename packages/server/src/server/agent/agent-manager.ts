@@ -21,6 +21,7 @@ import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { z } from "zod";
 import type { TerminalManager } from "../../terminal/terminal-manager.js";
+import { installCodexJevPostToolHook } from "../jev/codex-hook-install.js";
 
 import {
   getAgentStreamEventTurnId,
@@ -333,7 +334,9 @@ export interface AgentManagerOptions {
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
   jevPolicy?: {
     compactEnabled(): boolean;
+    toolAdmissionEnabled?(): boolean;
     claudeLaunchEnv(): Record<string, string> | undefined;
+    launchEnv?(): Record<string, string> | undefined;
   };
   appendSystemPrompt?: string;
   agentStreamCoalesceWindowMs?: number;
@@ -5188,18 +5191,7 @@ export class AgentManager {
       const transformed = await this.pluginLifecycle.before("agent.session_open", request);
       env = transformed.env;
     }
-    const jevEnv = this.jevPolicy?.compactEnabled() ? this.jevPolicy.claudeLaunchEnv() : undefined;
-    if (jevEnv) {
-      this.logger.info(
-        {
-          agentId,
-          provider: client.provider,
-          hasApiKeyFile: Boolean(jevEnv.TYPESAFE_API_KEY_FILE),
-          hasPluginPath: Boolean(jevEnv.PASEO_JEV_PLUGIN_PATH || process.env.PASEO_JEV_PLUGIN_PATH),
-        },
-        "Jev compact env applied to agent launch",
-      );
-    }
+    const jevEnv = this.applyJevLaunchEnv(agentId, client.provider);
     const context: AgentLaunchContext = {
       agentId,
       env: {
@@ -5221,6 +5213,42 @@ export class AgentManager {
       });
     }
     return context;
+  }
+
+  private applyJevLaunchEnv(agentId: string, provider: string): Record<string, string> | undefined {
+    const jevEnv =
+      this.jevPolicy?.launchEnv?.() ??
+      (this.jevPolicy?.compactEnabled() ? this.jevPolicy.claudeLaunchEnv() : undefined);
+    if (!jevEnv) return undefined;
+    if (jevEnv.PASEO_JEV_TOOL_ADMISSION === "1") {
+      jevEnv.PASEO_HOOK_CLI =
+        process.env.PASEO_HOOK_CLI?.trim() || process.env.PASEO_CLI?.trim() || "paseo";
+      try {
+        const installed = installCodexJevPostToolHook();
+        this.logger.info(
+          {
+            agentId,
+            provider,
+            configPath: installed.configPath,
+            changed: installed.changed,
+          },
+          "Jev Codex PostToolUse hook installed",
+        );
+      } catch (error) {
+        this.logger.warn({ err: error, agentId }, "Jev Codex PostToolUse hook install failed");
+      }
+    }
+    this.logger.info(
+      {
+        agentId,
+        provider,
+        hasApiKeyFile: Boolean(jevEnv.TYPESAFE_API_KEY_FILE),
+        toolAdmission: jevEnv.PASEO_JEV_TOOL_ADMISSION === "1",
+        hasPluginPath: Boolean(jevEnv.PASEO_JEV_PLUGIN_PATH || process.env.PASEO_JEV_PLUGIN_PATH),
+      },
+      "Jev compact env applied to agent launch",
+    );
+    return jevEnv;
   }
 
   private resolveProviderLaunchConfig(

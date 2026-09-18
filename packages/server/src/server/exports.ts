@@ -1,5 +1,6 @@
 // CLI exports for @getpaseo/server
 export { createPaseoDaemon, type PaseoDaemon, type PaseoDaemonConfig } from "./bootstrap.js";
+export { handleCodexJevPostToolHook } from "./jev/codex-post-tool-hook.js";
 export { loadConfig, type CliConfigOverrides } from "./config.js";
 export { resolvePaseoHome } from "./paseo-home.js";
 export { getOrCreateServerId } from "./server-id.js";
