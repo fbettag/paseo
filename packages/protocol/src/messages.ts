@@ -163,6 +163,17 @@ const MutableBrowserToolsConfigSchema = z
     enabled: z.boolean().default(false),
   })
   .passthrough();
+const MutableJevConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    compact: z.boolean().default(true),
+    toolAdmission: z.boolean().default(true),
+    browserPolicy: z.boolean().default(false),
+    baseUrl: z.string().trim().min(1).optional(),
+    apiKeyFile: z.string().trim().min(1).optional(),
+  })
+  .passthrough();
+export type MutableJevConfig = z.infer<typeof MutableJevConfigSchema>;
 const MutableRelayConfigSchema = z
   .object({
     enabled: z.boolean(),
@@ -196,6 +207,7 @@ export const MutableDaemonConfigSchema = z
     app: z.object({ baseUrl: z.string() }).optional(),
     catalogRefreshTimeoutMs: z.number().int().positive().optional(),
     browserTools: MutableBrowserToolsConfigSchema.default({ enabled: false }),
+    jev: MutableJevConfigSchema.optional(),
     providers: z.record(z.string(), MutableDaemonProviderConfigSchema).default({}),
     metadataGeneration: MutableMetadataGenerationConfigSchema.default({ providers: [] }),
     autoArchiveAfterMerge: z.boolean().default(false),
@@ -214,6 +226,7 @@ export const MutableDaemonConfigPatchSchema = z
     relay: MutableRelayConfigSchema.partial().optional(),
     mcp: z.object({ injectIntoAgents: z.boolean().optional() }).passthrough().optional(),
     browserTools: MutableBrowserToolsConfigSchema.partial().optional(),
+    jev: MutableJevConfigSchema.partial().optional(),
     providers: z
       .record(z.string(), MutableDaemonProviderConfigSchema.partial().passthrough())
       .optional(),

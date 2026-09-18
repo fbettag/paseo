@@ -59,6 +59,18 @@ describe("PersistedConfigSchema daemon browser tools config", () => {
   });
 });
 
+describe("PersistedConfigSchema daemon Jev config", () => {
+  test("accepts optional Jev opt-in", () => {
+    const parsed = PersistedConfigSchema.parse({
+      daemon: {
+        jev: { enabled: true, compact: false },
+      },
+    });
+
+    expect(parsed.daemon?.jev).toEqual({ enabled: true, compact: false });
+  });
+});
+
 describe("PersistedConfigSchema daemon relay config", () => {
   test("accepts optional relay TLS setting", () => {
     const parsed = PersistedConfigSchema.parse({

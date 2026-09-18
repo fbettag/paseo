@@ -331,6 +331,10 @@ export interface AgentManagerOptions {
   paseoToolsEnabled?: boolean;
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
+  jevPolicy?: {
+    compactEnabled(): boolean;
+    claudeLaunchEnv(): Record<string, string> | undefined;
+  };
   appendSystemPrompt?: string;
   agentStreamCoalesceWindowMs?: number;
   rescueTimeouts?: AgentManagerRescueTimeouts;
@@ -748,6 +752,7 @@ export class AgentManager {
   private readonly resolvePaseoToolPolicy: (
     provider: AgentProvider,
   ) => ProviderPaseoToolsPolicy | undefined;
+  private readonly jevPolicy: AgentManagerOptions["jevPolicy"];
   private appendSystemPrompt: string;
   private onAgentAttention?: AgentAttentionCallback;
   private onAgentArchived?: AgentArchivedCallback;
@@ -768,6 +773,7 @@ export class AgentManager {
     this.mcpAuthToken = options?.mcpAuthToken ?? null;
     this.configurePaseoTools(options);
     this.resolvePaseoToolPolicy = options.resolvePaseoToolPolicy ?? (() => undefined);
+    this.jevPolicy = options.jevPolicy;
     this.appendSystemPrompt = options.appendSystemPrompt ?? "";
     this.logger = options.logger.child({ module: "agent", component: "agent-manager" });
     this.rescueTimeouts = {
@@ -5182,10 +5188,12 @@ export class AgentManager {
       const transformed = await this.pluginLifecycle.before("agent.session_open", request);
       env = transformed.env;
     }
+    const jevEnv = this.jevPolicy?.compactEnabled() ? this.jevPolicy.claudeLaunchEnv() : undefined;
     const context: AgentLaunchContext = {
       agentId,
       env: {
         ...env,
+        ...jevEnv,
         PASEO_AGENT_ID: agentId,
         PASEO_AGENT_CWD: cwd,
       },

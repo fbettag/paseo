@@ -705,6 +705,41 @@ describe("DaemonConfigStore", () => {
     expect(persisted.daemon?.browserTools).toEqual({ enabled: true });
   });
 
+  test("patch persists Jev opt-in into config.json", () => {
+    const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
+    tempDirs.push(paseoHome);
+
+    const store = new DaemonConfigStore(
+      paseoHome,
+      {
+        mcp: { injectIntoAgents: false },
+        browserTools: { enabled: false },
+        providers: {},
+        metadataGeneration: { providers: [] },
+        autoArchiveAfterMerge: false,
+        appendSystemPrompt: "",
+      },
+      undefined,
+    );
+
+    store.patch({
+      jev: { enabled: true, compact: true, toolAdmission: false, browserPolicy: true },
+    });
+
+    expect(store.get().jev).toMatchObject({
+      enabled: true,
+      compact: true,
+      toolAdmission: false,
+      browserPolicy: true,
+    });
+    expect(loadPersistedConfig(paseoHome).daemon?.jev).toEqual({
+      enabled: true,
+      compact: true,
+      toolAdmission: false,
+      browserPolicy: true,
+    });
+  });
+
   test("patch persists provider additional models into config.json", () => {
     const paseoHome = mkdtempSync(path.join(tmpdir(), "paseo-daemon-config-store-"));
     tempDirs.push(paseoHome);

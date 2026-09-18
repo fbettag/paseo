@@ -20,6 +20,7 @@ interface SupportedMutableConfigPatch {
   relay?: { enabled?: boolean };
   mcp?: { injectIntoAgents?: boolean };
   browserTools?: { enabled?: boolean };
+  jev?: MutableDaemonConfigPatch["jev"];
   providers?: MutableDaemonConfig["providers"];
   removeProviders?: string[];
   metadataGeneration?: MutableDaemonConfig["metadataGeneration"];
@@ -173,6 +174,12 @@ const RELOADABLE_PATHS = [
   "daemon.mcp.enabled",
   "daemon.mcp.injectIntoAgents",
   "daemon.browserTools.enabled",
+  "daemon.jev.enabled",
+  "daemon.jev.compact",
+  "daemon.jev.toolAdmission",
+  "daemon.jev.browserPolicy",
+  "daemon.jev.baseUrl",
+  "daemon.jev.apiKeyFile",
   "daemon.hostnames",
   "daemon.cors.allowedOrigins",
   "daemon.trustedProxies",
@@ -196,6 +203,12 @@ const PERSISTED_TO_MUTABLE_PATH = new Map<string, string>([
   ["daemon.mcp.enabled", "mcp.enabled"],
   ["daemon.mcp.injectIntoAgents", "mcp.injectIntoAgents"],
   ["daemon.browserTools.enabled", "browserTools.enabled"],
+  ["daemon.jev.enabled", "jev.enabled"],
+  ["daemon.jev.compact", "jev.compact"],
+  ["daemon.jev.toolAdmission", "jev.toolAdmission"],
+  ["daemon.jev.browserPolicy", "jev.browserPolicy"],
+  ["daemon.jev.baseUrl", "jev.baseUrl"],
+  ["daemon.jev.apiKeyFile", "jev.apiKeyFile"],
   ["daemon.hostnames", "hostnames"],
   ["daemon.cors.allowedOrigins", "cors.allowedOrigins"],
   ["daemon.trustedProxies", "trustedProxies"],
@@ -258,6 +271,7 @@ function pickSupportedPatchFields(patch: MutableDaemonConfigPatch): SupportedMut
     ...(patch.browserTools?.enabled !== undefined
       ? { browserTools: { enabled: patch.browserTools.enabled } }
       : {}),
+    ...(patch.jev !== undefined ? { jev: patch.jev } : {}),
     ...(patch.providers !== undefined ? { providers: patch.providers } : {}),
     ...(patch.removeProviders !== undefined ? { removeProviders: patch.removeProviders } : {}),
     ...(patch.metadataGeneration?.providers !== undefined
@@ -651,6 +665,9 @@ function mergeMutableDaemonPatch(
   }
   if (patch.browserTools?.enabled !== undefined) {
     next.browserTools = { ...next.browserTools, enabled: patch.browserTools.enabled };
+  }
+  if (patch.jev !== undefined) {
+    next.jev = { ...next.jev, ...patch.jev };
   }
   if (patch.autoArchiveAfterMerge !== undefined) {
     next.autoArchiveAfterMerge = patch.autoArchiveAfterMerge;

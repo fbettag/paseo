@@ -169,4 +169,23 @@ describe("browser automation protocol integration", () => {
       }).browserTools,
     ).toEqual({ enabled: true });
   });
+
+  test("mutable daemon config accepts Jev patches without requiring the block", () => {
+    expect(
+      MutableDaemonConfigSchema.parse({
+        mcp: { injectIntoAgents: false },
+      }).jev,
+    ).toBeUndefined();
+
+    expect(
+      MutableDaemonConfigPatchSchema.parse({
+        jev: { enabled: true, compact: false },
+      }).jev,
+    ).toEqual({
+      enabled: true,
+      compact: false,
+      toolAdmission: true,
+      browserPolicy: false,
+    });
+  });
 });
