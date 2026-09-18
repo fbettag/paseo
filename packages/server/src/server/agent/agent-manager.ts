@@ -21,8 +21,7 @@ import type { ProviderOptions, ToolPolicy } from "@getpaseo/protocol/agent-types
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { z } from "zod";
 import type { TerminalManager } from "../../terminal/terminal-manager.js";
-import { admitToolResultText } from "../jev/admit-text-result.js";
-import { CODEX_ADMIT_INSTRUCTIONS, CODEX_KEEP_THRESHOLD } from "../jev/admit-codex-exec.js";
+import { scoreCompactToolHistory } from "../jev/compact-tool-history.js";
 import type { JevClient } from "../jev/client.js";
 
 import {
@@ -335,6 +334,7 @@ export interface AgentManagerOptions {
   paseoToolCatalogFactory?: PaseoToolCatalogFactory;
   resolvePaseoToolPolicy?: (provider: AgentProvider) => ProviderPaseoToolsPolicy | undefined;
   jevPolicy?: {
+    isEnabled?(): boolean;
     compactEnabled(): boolean;
     toolAdmissionEnabled?(): boolean;
     createClient?(): JevClient | null;
@@ -5203,7 +5203,7 @@ export class AgentManager {
         PASEO_AGENT_ID: agentId,
         PASEO_AGENT_CWD: cwd,
       },
-      jevAdmit: this.buildJevAdmit(),
+      jevCompact: this.buildJevCompact(),
     };
     if (
       this.paseoToolsEnabled &&
@@ -5237,21 +5237,16 @@ export class AgentManager {
     return jevEnv;
   }
 
-  private buildJevAdmit(): AgentLaunchContext["jevAdmit"] {
-    if (!this.jevPolicy?.toolAdmissionEnabled?.()) return undefined;
+  private buildJevCompact(): AgentLaunchContext["jevCompact"] {
+    if (!this.jevPolicy?.isEnabled?.()) return undefined;
     const policy = this.jevPolicy;
     const logger = this.logger.child({ module: "jev" });
-    return async (input) => {
+    return async (snapshots) => {
       const client = policy.createClient?.() ?? null;
       if (!client) {
-        return { decision: "fail_open", text: input.text };
+        return { considered: snapshots.length, scored: 0, keep: 0, drop: 0, droppedChars: 0 };
       }
-      return admitToolResultText(client, {
-        ...input,
-        keepThreshold: CODEX_KEEP_THRESHOLD,
-        instructions: CODEX_ADMIT_INSTRUCTIONS,
-        logger,
-      });
+      return scoreCompactToolHistory(client, snapshots, logger);
     };
   }
 

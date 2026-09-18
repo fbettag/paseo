@@ -111,10 +111,11 @@ import {
   type CodexProviderOptions,
 } from "./codex/options.js";
 import {
-  admitCodexExecOutput,
-  admitCommandExecutionItem,
-  type CodexJevAdmit,
-} from "../../jev/admit-codex-exec.js";
+  collectCompactToolSnapshots,
+  formatJevCompactStatus,
+  snapshotFromCommandExecutionItem,
+  type CompactToolSnapshot,
+} from "../../jev/compact-tool-history.js";
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -258,7 +259,7 @@ interface CodexAppServerClientLike {
 }
 
 interface CodexAppServerAgentDeps {
-  jevAdmit?: CodexJevAdmit;
+  jevCompact?: AgentLaunchContext["jevCompact"];
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
     id: string;
@@ -3441,7 +3442,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     name: string;
   } | null = null;
   private cachedSkills: Array<{ name: string; description: string; path: string }> | null = null;
-  private jevAdmitQueue: Promise<void> = Promise.resolve();
+  private jevCompactJournal: CompactToolSnapshot[] = [];
 
   constructor(
     config: AgentSessionConfig,
@@ -4989,12 +4990,12 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (parsed.commandName === "compact") {
       return {
         run: async ({ emit }) => {
-          const error = await this.executeCompactCommand();
-          if (error) {
+          const message = await this.executeCompactCommand();
+          if (message) {
             emit({
               type: "timeline",
               provider: CODEX_PROVIDER,
-              item: { type: "assistant_message", text: formatOutOfBandStatusMessage(error) },
+              item: { type: "assistant_message", text: formatOutOfBandStatusMessage(message) },
             });
           }
         },
@@ -5029,18 +5030,55 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       this.pendingManualCompactionStarts += 1;
       try {
+        const score = await this.scoreJevCompact("manual");
         await this.client.request("thread/compact/start", {
           threadId: this.currentThreadId,
         });
+        return score ? formatJevCompactStatus(score) : null;
       } catch (error) {
         this.pendingManualCompactionStarts = Math.max(0, this.pendingManualCompactionStarts - 1);
         throw error;
       }
-      return null;
     } catch (error) {
       const message = error instanceof Error ? error.message : "unknown error";
       return `Failed to compact context: ${message}`;
     }
+  }
+
+  private async scoreJevCompact(trigger: "manual" | "auto"): Promise<{
+    considered: number;
+    scored: number;
+    keep: number;
+    drop: number;
+    droppedChars: number;
+  } | null> {
+    if (!this.deps.jevCompact) return null;
+    let snapshots = this.jevCompactJournal;
+    if (snapshots.length === 0 && this.client && this.currentThreadId) {
+      try {
+        const history = await requestCodexThreadHistory(
+          (threadId) => readCodexThread(this.client!, threadId),
+          this.currentThreadId,
+        );
+        snapshots = collectCompactToolSnapshots(history.thread.turns);
+      } catch (error) {
+        this.logger.warn({ err: error, trigger }, "Jev compact history read failed");
+      }
+    }
+    const score = await this.deps.jevCompact(snapshots);
+    this.jevCompactJournal = [];
+    this.logger.info(
+      {
+        trigger,
+        considered: score.considered,
+        scored: score.scored,
+        keep: score.keep,
+        drop: score.drop,
+        droppedChars: score.droppedChars,
+      },
+      "Jev compact scored",
+    );
+    return score;
   }
 
   private async executeGoalSubcommand(subcommand: GoalSubcommand): Promise<string> {
@@ -6209,11 +6247,25 @@ export class CodexAppServerAgentSession implements AgentSession {
     this.truncateCodexUserMessageTurns(parsed.numTurns);
   }
 
+  private recordJevCompactSnapshot(item: unknown): void {
+    const snapshot = snapshotFromCommandExecutionItem(item);
+    if (!snapshot) return;
+    this.jevCompactJournal.push(snapshot);
+    if (this.jevCompactJournal.length > 48) {
+      this.jevCompactJournal.splice(0, this.jevCompactJournal.length - 48);
+    }
+  }
+
   private handleContextCompactedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "context_compacted" }>,
   ): void {
     if (parsed.threadId !== this.currentThreadId) {
       return;
+    }
+    if (this.pendingManualCompactionStarts === 0 && this.deps.jevCompact) {
+      void this.scoreJevCompact("auto").catch((error) => {
+        this.logger.warn({ err: error }, "Jev auto-compact score failed");
+      });
     }
     if (this.unpairedCompactionItemCompletions > 0) {
       this.unpairedCompactionItemCompletions -= 1;
@@ -6271,41 +6323,20 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (!subAgentCallId) {
       this.rememberTerminalProcessForCommand(parsed.command, resolvedOutput);
     }
-    const callId = typeof parsed.callId === "string" ? parsed.callId : undefined;
-    if (callId && !subAgentCallId) {
-      this.emittedExecCommandCompletedCallIds.add(callId);
-    }
-    this.jevAdmitQueue = this.jevAdmitQueue
-      .then(() => this.emitAdmittedExecCommand(parsed, resolvedOutput, subAgentCallId))
-      .catch((error) => {
-        this.logger.warn({ err: error }, "Jev Codex exec admission failed open");
-      });
-  }
-
-  private async emitAdmittedExecCommand(
-    parsed: Extract<ParsedCodexNotification, { kind: "exec_command_completed" }>,
-    resolvedOutput: string | null | undefined,
-    subAgentCallId: string | null,
-  ): Promise<void> {
-    const isError =
-      parsed.success === false || (typeof parsed.exitCode === "number" && parsed.exitCode !== 0);
-    const admitted = await admitCodexExecOutput(this.deps.jevAdmit, {
-      command: parsed.command,
-      output: resolvedOutput,
-      stderr: parsed.stderr,
-      isError,
-    });
     const timelineItem = mapCodexExecNotificationToToolCall({
       callId: parsed.callId,
       command: parsed.command,
       cwd: parsed.cwd ?? this.config.cwd ?? null,
-      output: admitted.output,
+      output: resolvedOutput,
       exitCode: parsed.exitCode,
       success: parsed.success,
       stderr: parsed.stderr,
       running: false,
     });
     if (timelineItem) {
+      if (!subAgentCallId) {
+        this.emittedExecCommandCompletedCallIds.add(timelineItem.callId);
+      }
       this.emitCodexToolTimelineItem(timelineItem, subAgentCallId, parsed.threadId);
     }
   }
@@ -6434,31 +6465,6 @@ export class CodexAppServerAgentSession implements AgentSession {
   private handleItemCompletedNotification(
     parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
   ): void {
-    const itemType = normalizeCodexThreadItemType(
-      typeof parsed.item.type === "string" ? parsed.item.type : undefined,
-    );
-    if (itemType === "commandExecution" && this.deps.jevAdmit) {
-      this.jevAdmitQueue = this.jevAdmitQueue
-        .then(() => this.handleItemCompletedAfterJev(parsed))
-        .catch((error) => {
-          this.logger.warn({ err: error }, "Jev commandExecution admission failed open");
-          this.handleItemCompletedUnlocked(parsed);
-        });
-      return;
-    }
-    this.handleItemCompletedUnlocked(parsed);
-  }
-
-  private async handleItemCompletedAfterJev(
-    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
-  ): Promise<void> {
-    await admitCommandExecutionItem(this.deps.jevAdmit, parsed.item);
-    this.handleItemCompletedUnlocked(parsed);
-  }
-
-  private handleItemCompletedUnlocked(
-    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
-  ): void {
     // Codex emits mirrored lifecycle notifications via both `codex/event/item_*`
     // and canonical `item/*`. Render ordinary items only from the canonical
     // channel, but accept a legacy-only child announcement so it can establish
@@ -6466,6 +6472,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (shouldIgnoreMirroredLifecycleItem(parsed.source, parsed.item)) {
       return;
     }
+    this.recordJevCompactSnapshot(parsed.item);
     this.receiveAsyncQuestion(parsed.threadId, parsed.item);
     if (this.isUserMessageItem(parsed.item)) {
       this.handleUserMessageItem(parsed);
@@ -7074,7 +7081,7 @@ export class CodexAppServerAgentClient implements AgentClient {
   private sessionDeps(launchContext?: AgentLaunchContext): CodexAppServerAgentDeps {
     return {
       ...this.deps,
-      jevAdmit: launchContext?.jevAdmit ?? this.deps.jevAdmit,
+      jevCompact: launchContext?.jevCompact ?? this.deps.jevCompact,
       customCodexConfig: buildCodexCustomProviderConfig(
         this.runtimeSettings,
         this.deps.customProvider,

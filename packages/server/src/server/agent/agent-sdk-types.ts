@@ -634,18 +634,22 @@ export interface AgentLaunchContext {
    */
   paseoTools?: PaseoToolCatalog;
   /**
-   * Runtime-only Jev admission for native provider tool results.
-   * Never persist this; providers must not write it into session metadata.
+   * Runtime-only Jev compact scoring. Never persist this.
    */
-  jevAdmit?: (input: {
-    toolName: string;
-    input: unknown;
-    text: string;
-    isError?: boolean;
-  }) => Promise<{
-    decision: "keep" | "truncate" | "skip_short" | "skip_error" | "fail_open";
-    text: string;
-    noul?: number;
+  jevCompact?: (
+    snapshots: Array<{
+      itemId: string;
+      command: string;
+      resultChars: number;
+      resultHead: string;
+      isError: boolean;
+    }>,
+  ) => Promise<{
+    considered: number;
+    scored: number;
+    keep: number;
+    drop: number;
+    droppedChars: number;
   }>;
 }
 
