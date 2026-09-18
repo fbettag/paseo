@@ -110,7 +110,11 @@ import {
   CodexProviderOptionsSchema,
   type CodexProviderOptions,
 } from "./codex/options.js";
-import { admitCodexExecOutput, type CodexJevAdmit } from "../../jev/admit-codex-exec.js";
+import {
+  admitCodexExecOutput,
+  admitCommandExecutionItem,
+  type CodexJevAdmit,
+} from "../../jev/admit-codex-exec.js";
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -6428,6 +6432,31 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private handleItemCompletedNotification(
+    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
+  ): void {
+    const itemType = normalizeCodexThreadItemType(
+      typeof parsed.item.type === "string" ? parsed.item.type : undefined,
+    );
+    if (itemType === "commandExecution" && this.deps.jevAdmit) {
+      this.jevAdmitQueue = this.jevAdmitQueue
+        .then(() => this.handleItemCompletedAfterJev(parsed))
+        .catch((error) => {
+          this.logger.warn({ err: error }, "Jev commandExecution admission failed open");
+          this.handleItemCompletedUnlocked(parsed);
+        });
+      return;
+    }
+    this.handleItemCompletedUnlocked(parsed);
+  }
+
+  private async handleItemCompletedAfterJev(
+    parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
+  ): Promise<void> {
+    await admitCommandExecutionItem(this.deps.jevAdmit, parsed.item);
+    this.handleItemCompletedUnlocked(parsed);
+  }
+
+  private handleItemCompletedUnlocked(
     parsed: Extract<ParsedCodexNotification, { kind: "item_completed" }>,
   ): void {
     // Codex emits mirrored lifecycle notifications via both `codex/event/item_*`

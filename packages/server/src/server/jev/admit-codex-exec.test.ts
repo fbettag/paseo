@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { admitCodexExecOutput, combineCodexExecText } from "./admit-codex-exec.js";
+import {
+  admitCodexExecOutput,
+  admitCommandExecutionItem,
+  combineCodexExecText,
+} from "./admit-codex-exec.js";
 
 describe("admitCodexExecOutput", () => {
   it("joins stdout and stderr", () => {
@@ -24,6 +28,19 @@ describe("admitCodexExecOutput", () => {
         { command: "seq 1 800", output: "1\n2\n3", isError: false },
       ),
     ).resolves.toEqual({ output: "1\n[… omitted by Jev …]" });
+  });
+
+  it("mutates commandExecution aggregatedOutput when truncated", async () => {
+    const item: Record<string, unknown> = {
+      type: "commandExecution",
+      command: "seq 1 800",
+      aggregatedOutput: "1\n2\n3",
+    };
+    await admitCommandExecutionItem(
+      async () => ({ decision: "truncate", text: "truncated" }),
+      item,
+    );
+    expect(item.aggregatedOutput).toBe("truncated");
   });
 
   it("keeps output when Jev keeps", async () => {
