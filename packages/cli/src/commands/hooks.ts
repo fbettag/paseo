@@ -25,7 +25,9 @@ export function createHooksCommand(): Command {
     .description("Record agent hook activity")
     .argument("<agent>", "Agent hook source")
     .argument("<event>", "Agent hook event")
-    .action((agent: string, event: string) => runHooksCommand(agent, event));
+    .action(async (agent: string, event: string) => {
+      await runHooksCommand(agent, event);
+    });
 }
 
 export async function runHooksCommand(
