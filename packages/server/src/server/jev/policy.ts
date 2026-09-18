@@ -56,6 +56,12 @@ export class DaemonConfigJevPolicy {
     }
     if (snapshot.baseUrl) env.PASEO_JEV_BASE_URL = snapshot.baseUrl;
     if (snapshot.apiKeyFile) env.TYPESAFE_API_KEY_FILE = snapshot.apiKeyFile;
+    const pluginPath = snapshot.pluginPath;
+    if (typeof pluginPath === "string" && pluginPath.trim().length > 0) {
+      env.PASEO_JEV_PLUGIN_PATH = pluginPath.trim();
+    } else if (process.env.PASEO_JEV_PLUGIN_PATH) {
+      env.PASEO_JEV_PLUGIN_PATH = process.env.PASEO_JEV_PLUGIN_PATH;
+    }
     return Object.keys(env).length > 0 ? env : undefined;
   }
 
@@ -86,7 +92,10 @@ export class DaemonConfigJevPolicy {
         hasApiKey,
         apiKeyFile: snapshot.apiKeyFile ?? null,
         baseUrl: snapshot.baseUrl ?? DEFAULT_JEV_BASE_URL,
-        pluginPathConfigured: Boolean(process.env.PASEO_JEV_PLUGIN_PATH),
+        pluginPathConfigured: Boolean(
+          (typeof snapshot.pluginPath === "string" && snapshot.pluginPath.length > 0) ||
+          process.env.PASEO_JEV_PLUGIN_PATH,
+        ),
       },
       "Jev policy loaded",
     );
