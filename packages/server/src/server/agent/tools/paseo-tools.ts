@@ -95,8 +95,10 @@ import type {
   PaseoToolConfig,
   PaseoToolDefinition,
   PaseoToolExecutionContext,
+  PaseoToolJevAdmission,
   PaseoToolResult,
 } from "./types.js";
+import { admitPaseoToolResult } from "../../jev/admit-tool-result.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 
@@ -135,6 +137,7 @@ export interface PaseoToolHostDependencies {
   ) => Promise<string>;
   browserToolsEnabled?: boolean;
   browserToolsBroker?: BrowserToolsBroker | null;
+  jevPolicy?: PaseoToolJevAdmission;
   paseoToolPolicy?: ProviderPaseoToolsPolicy;
   paseoHome?: string;
   worktreesRoot?: string;
@@ -624,7 +627,16 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       if (!tool) {
         throw new Error(`Paseo tool not found: ${name}`);
       }
-      return tool.handler(await parseToolInput(tool, input), context);
+      const parsedInput = await parseToolInput(tool, input);
+      const result = await tool.handler(parsedInput, context);
+      if (!options.jevPolicy?.toolAdmissionEnabled()) {
+        return result;
+      }
+      const client = options.jevPolicy.createClient();
+      if (!client) {
+        return result;
+      }
+      return admitPaseoToolResult(client, { toolName: name, input: parsedInput, result });
     },
   });
 

@@ -250,6 +250,17 @@ export const PersistedConfigSchema = z
           })
           .passthrough()
           .optional(),
+        jev: z
+          .object({
+            enabled: z.boolean().optional(),
+            compact: z.boolean().optional(),
+            toolAdmission: z.boolean().optional(),
+            browserPolicy: z.boolean().optional(),
+            baseUrl: z.string().trim().min(1).optional(),
+            apiKeyFile: z.string().trim().min(1).optional(),
+          })
+          .passthrough()
+          .optional(),
         git: z
           .object({
             maxProcessesPerSecond: z.number().int().positive().optional(),

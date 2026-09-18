@@ -177,6 +177,7 @@ import type {
   AgentProfile,
   AgentSkillSelection,
   FirstAgentContext,
+  MutableJevConfig,
   PluginSource,
   TerminalProfile,
 } from "@getpaseo/protocol/messages";
@@ -185,6 +186,8 @@ import type {
   ProviderOverride,
 } from "./agent/provider-launch-config.js";
 import { loadPersistedConfig, type PersistedConfig } from "./persisted-config.js";
+import { resolveJevConfig } from "./jev/defaults.js";
+import { DaemonConfigJevPolicy } from "./jev/policy.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { ScriptHealthMonitor } from "./script-health-monitor.js";
@@ -399,6 +402,7 @@ export interface PaseoDaemonConfig {
   mcpEnabled?: boolean;
   mcpInjectIntoAgents?: boolean;
   browserToolsEnabled?: boolean;
+  jev?: MutableJevConfig;
   git?: {
     maxProcessesPerSecond: number;
     maxProcessConcurrency: number;
@@ -551,6 +555,7 @@ function createInitialMutableDaemonConfig(config: PaseoDaemonConfig): MutableDae
       ? { catalogRefreshTimeoutMs: config.providerCatalogRefreshTimeoutMs }
       : {}),
     browserTools: { enabled: config.browserToolsEnabled ?? false },
+    jev: resolveJevConfig(config.jev),
     providers,
     metadataGeneration: {
       providers: config.metadataGeneration?.providers ?? [],
@@ -615,6 +620,7 @@ export async function createPaseoDaemon(
   });
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
+  const jevPolicy = new DaemonConfigJevPolicy(daemonConfigStore);
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
     managedSources: new ManagedPluginSources(config.paseoHome),
     builtinPlugins: resolveBuiltinPluginLoader(dependencies),
@@ -944,6 +950,7 @@ export async function createPaseoDaemon(
     mcpAuthToken: agentMcpAuthToken,
     resolvePaseoToolPolicy: (provider) =>
       resolvePaseoToolPolicy(provider, daemonConfigStore.get().providers),
+    jevPolicy,
     logger,
   });
   const syncPluginProviders = () => {
@@ -1438,6 +1445,7 @@ export async function createPaseoDaemon(
     createPaseoWorktree: createAgentCommandDependencies.createPaseoWorktree,
     browserToolsEnabled: browserToolsPolicy.isEnabled(),
     browserToolsBroker,
+    jevPolicy,
     paseoToolPolicy:
       runtime.paseoToolPolicy ??
       (runtime.callerAgentId ? agentManager.getPaseoToolPolicy(runtime.callerAgentId) : undefined),

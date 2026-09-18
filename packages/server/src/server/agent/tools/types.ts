@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
+import type { JevClient } from "../../jev/client.js";
 
 export interface PaseoToolExecutionContext {
   signal?: AbortSignal;
@@ -33,6 +34,11 @@ export interface PaseoToolCatalog {
     input: unknown,
     context?: PaseoToolExecutionContext,
   ): Promise<PaseoToolResult>;
+}
+
+export interface PaseoToolJevAdmission {
+  toolAdmissionEnabled(): boolean;
+  createClient(): JevClient | null;
 }
 
 export interface PaseoToolRuntimeContext {
