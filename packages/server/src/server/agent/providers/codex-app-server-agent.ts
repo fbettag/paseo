@@ -7200,7 +7200,11 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: { goalsEnabled?: boolean; agentId?: string },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
-    const args = [...launchPrefix.args, "app-server"];
+    const args = [...launchPrefix.args];
+    if (launchEnv?.PASEO_JEV_TOOL_ADMISSION === "1") {
+      args.push("--dangerously-bypass-hook-trust");
+    }
+    args.push("app-server");
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
     }

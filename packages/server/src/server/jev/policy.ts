@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 
 import type { DaemonConfigStore } from "../daemon-config-store.js";
 import { JevClient, noulAnswer, resolveJevApiKey } from "./client.js";
+import { installCodexJevPostToolHook } from "./codex-hook-install.js";
 import { DEFAULT_JEV_BASE_URL, resolveJevConfig } from "./defaults.js";
 
 export class DaemonConfigJevPolicy {
@@ -44,14 +45,22 @@ export class DaemonConfigJevPolicy {
   }
 
   public claudeLaunchEnv(): Record<string, string> | undefined {
-    if (!this.compactEnabled()) return undefined;
+    return this.launchEnv();
+  }
+
+  public launchEnv(): Record<string, string> | undefined {
+    if (!this.isEnabled()) return undefined;
     const snapshot = this.snapshot();
-    const env: Record<string, string> = {
-      CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1",
-    };
+    const env: Record<string, string> = {};
+    if (this.compactEnabled()) {
+      env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS = "1";
+    }
+    if (this.toolAdmissionEnabled()) {
+      env.PASEO_JEV_TOOL_ADMISSION = "1";
+    }
     if (snapshot.baseUrl) env.PASEO_JEV_BASE_URL = snapshot.baseUrl;
     if (snapshot.apiKeyFile) env.TYPESAFE_API_KEY_FILE = snapshot.apiKeyFile;
-    return env;
+    return Object.keys(env).length > 0 ? env : undefined;
   }
 
   public createClient(): JevClient | null {
@@ -91,6 +100,17 @@ export class DaemonConfigJevPolicy {
         "Jev enabled without TypeSafe API key; failing open",
       );
       return;
+    }
+    if (this.toolAdmissionEnabled()) {
+      try {
+        const installed = installCodexJevPostToolHook();
+        this.logger?.info(
+          { configPath: installed.configPath, changed: installed.changed },
+          "Jev Codex PostToolUse hook installed",
+        );
+      } catch (error) {
+        this.logger?.warn({ err: error }, "Jev Codex PostToolUse hook install failed");
+      }
     }
     if (snapshot.enabled !== true || !hasApiKey) return;
     const client = this.createClient();
