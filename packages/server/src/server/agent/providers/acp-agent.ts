@@ -1,5 +1,6 @@
 import { type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -58,6 +59,18 @@ import {
   type Stream as ACPStream,
 } from "@agentclientprotocol/sdk";
 import type { Logger } from "pino";
+
+import { DEFAULT_TRUNCATE_HEAD_CHARS } from "../../jev/admit-text-result.js";
+import {
+  formatJevCompactStatus,
+  type CompactToolSnapshot,
+} from "../../jev/compact-tool-history.js";
+import {
+  collectGrokCompactSnapshots,
+  findGrokChatHistoryFile,
+  grokCallCommand,
+  rewriteGrokChatHistoryFile,
+} from "../../jev/grok-compact-history.js";
 
 import {
   getAgentStreamEventTurnId,
@@ -476,6 +489,7 @@ interface ACPAgentSessionOptions {
   handle?: AgentPersistenceHandle;
   agentId?: string;
   launchEnv?: Record<string, string>;
+  jevCompact?: AgentLaunchContext["jevCompact"];
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
@@ -581,6 +595,31 @@ export interface ACPToolSnapshot {
   locations?: ToolCallLocation[] | null;
   rawInput?: unknown;
   rawOutput?: unknown;
+}
+
+function acpToolOutputText(snapshot: ACPToolSnapshot): string {
+  const parts: string[] = [];
+  if (typeof snapshot.rawOutput === "string") {
+    parts.push(snapshot.rawOutput);
+  } else if (snapshot.rawOutput != null) {
+    parts.push(JSON.stringify(snapshot.rawOutput));
+  }
+  for (const block of snapshot.content ?? []) {
+    if (block.type === "content") {
+      const content = "text" in block && typeof block.text === "string" ? block.text : null;
+      if (content) parts.push(content);
+      const nested = "content" in block ? block.content : null;
+      if (
+        nested &&
+        typeof nested === "object" &&
+        "text" in nested &&
+        typeof nested.text === "string"
+      ) {
+        parts.push(nested.text);
+      }
+    }
+  }
+  return parts.join("");
 }
 
 interface PendingPermission {
@@ -965,6 +1004,7 @@ export class ACPAgentClient implements AgentClient {
         capabilities: this.capabilities,
         agentId: launchContext?.agentId,
         launchEnv: launchContext?.env,
+        jevCompact: launchContext?.jevCompact,
         extensionCommandsParser: this.extensionCommandsParser,
         waitForInitialCommands: this.waitForInitialCommands,
         initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
@@ -1016,6 +1056,7 @@ export class ACPAgentClient implements AgentClient {
       handle,
       agentId: launchContext?.agentId,
       launchEnv: launchContext?.env,
+      jevCompact: launchContext?.jevCompact,
       extensionCommandsParser: this.extensionCommandsParser,
       waitForInitialCommands: this.waitForInitialCommands,
       initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
@@ -1656,6 +1697,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   ) => Promise<void>;
   private readonly agentId?: string;
   private readonly launchEnv?: Record<string, string>;
+  private readonly jevCompact?: AgentLaunchContext["jevCompact"];
+  private jevCompactJournal: CompactToolSnapshot[] = [];
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private pendingUserMessage: PendingUserMessage | null = null;
@@ -1715,6 +1758,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.availableModes = options.defaultModes;
     this.agentId = options.agentId;
     this.launchEnv = options.launchEnv;
+    this.jevCompact = options.jevCompact;
     this.initialHandle = options.handle;
     this.config = { ...config, provider: options.provider };
     this.currentMode = config.modeId ?? null;
@@ -1895,6 +1939,27 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     }
     return () => {
       this.subscribers.delete(callback);
+    };
+  }
+
+  tryHandleOutOfBand(
+    prompt: AgentPromptInput,
+  ): { run(ctx: { emit: (event: AgentStreamEvent) => void }): Promise<void> } | null {
+    if (!this.isGrokCompactTarget() || !this.jevCompact) return null;
+    if (typeof prompt !== "string") return null;
+    const trimmed = prompt.trim();
+    if (trimmed !== "/compact" && !trimmed.startsWith("/compact ")) return null;
+    return {
+      run: async ({ emit }) => {
+        const message = await this.executeGrokCompactCommand();
+        if (message) {
+          emit({
+            type: "timeline",
+            provider: this.provider,
+            item: { type: "assistant_message", text: `${message.replace(/\n+$/u, "")}\n\n` },
+          });
+        }
+      },
     };
   }
 
@@ -3019,6 +3084,112 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     ];
   }
 
+  private isGrokCompactTarget(): boolean {
+    if (this.provider === "grok") return true;
+    const binary = this.defaultCommand[0] ?? "";
+    return /(^|[\\/])grok$/.test(binary);
+  }
+
+  private grokHome(): string {
+    return this.launchEnv?.GROK_HOME ?? process.env.GROK_HOME ?? path.join(homedir(), ".grok");
+  }
+
+  private recordGrokCompactSnapshot(snapshot: ACPToolSnapshot): void {
+    if (!this.isGrokCompactTarget() || !this.jevCompact) return;
+    if (snapshot.status !== "completed") return;
+    const output = acpToolOutputText(snapshot);
+    if (output.length <= DEFAULT_TRUNCATE_HEAD_CHARS) return;
+    const command = grokCallCommand(snapshot.kind ?? snapshot.title ?? "tool", snapshot.rawInput);
+    this.jevCompactJournal.push({
+      itemId: snapshot.toolCallId,
+      command,
+      resultChars: output.length,
+      resultHead: output.slice(0, 800),
+      isError: false,
+    });
+    if (this.jevCompactJournal.length > 48) {
+      this.jevCompactJournal = this.jevCompactJournal.slice(-48);
+    }
+  }
+
+  private async executeGrokCompactCommand(): Promise<string | null> {
+    if (!this.connection || !this.sessionId || !this.jevCompact) {
+      throw new Error("Grok session is not available");
+    }
+    let snapshots = this.jevCompactJournal;
+    if (snapshots.length === 0) {
+      const historyPath = findGrokChatHistoryFile(this.grokHome(), this.sessionId);
+      if (historyPath) {
+        snapshots = collectGrokCompactSnapshots(readFileSync(historyPath, "utf8"));
+      }
+    }
+    const score = await this.jevCompact(snapshots);
+    this.jevCompactJournal = [];
+    this.logger.info(
+      {
+        considered: score.considered,
+        scored: score.scored,
+        keep: score.keep,
+        drop: score.drop,
+        droppedChars: score.droppedChars,
+      },
+      "Jev compact scored",
+    );
+    const applied = this.applyGrokCompact(score);
+    try {
+      await this.connection.extMethod("x.ai/compact_conversation", {
+        sessionId: this.sessionId,
+      });
+    } catch (error) {
+      this.logger.warn({ err: error }, "Grok compact_conversation failed; sending /compact");
+      await this.connection.prompt({
+        sessionId: this.sessionId,
+        prompt: [{ type: "text", text: "/compact" }],
+      });
+    }
+    this.pushEvent({
+      type: "timeline",
+      provider: this.provider,
+      item: { type: "compaction", status: "completed", trigger: "manual" },
+    });
+    return formatJevCompactStatus(score, {
+      applied,
+      label: "Grok",
+    });
+  }
+
+  private applyGrokCompact(score: {
+    drop: number;
+    decisions?: Array<{
+      itemId: string;
+      command: string;
+      resultChars: number;
+      noul: number;
+      decision: "keep" | "drop";
+    }>;
+  }): boolean {
+    if (!this.sessionId || score.drop <= 0 || !score.decisions || score.decisions.length === 0) {
+      return false;
+    }
+    const historyPath = findGrokChatHistoryFile(this.grokHome(), this.sessionId);
+    if (!historyPath) {
+      this.logger.warn({ sessionId: this.sessionId }, "Jev compact Grok history not found");
+      return false;
+    }
+    const rewritten = rewriteGrokChatHistoryFile(historyPath, score.decisions);
+    if (rewritten.applied === 0) return false;
+    this.logger.info(
+      {
+        sessionId: this.sessionId,
+        historyPath,
+        applied: rewritten.applied,
+        droppedChars: rewritten.droppedChars,
+      },
+      "Jev compact applied to Grok history",
+    );
+    return true;
+  }
+
   private handleToolCallUpdate(
     toolCallId: string,
     update: ToolCall | ToolCallUpdate,
@@ -3029,6 +3200,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       snapshot = this.toolSnapshotTransformer(snapshot);
     }
     this.toolCalls.set(toolCallId, snapshot);
+    this.recordGrokCompactSnapshot(snapshot);
     return [this.wrapTimeline(mapToolSnapshotToTimeline(snapshot, this.terminalEntries))];
   }
 
