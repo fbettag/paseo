@@ -193,14 +193,14 @@ export function formatJevCompactStatus(
     drop: number;
     droppedChars: number;
   },
-  options?: { applied?: boolean },
+  options?: { applied?: boolean; label?: string },
 ): string {
   if (score.scored === 0) {
     return "Jev compact: no large shell results to score.";
   }
   const summary = `Jev compact: drop ${score.drop}/${score.scored} shell results (${score.droppedChars} chars), keep ${score.keep}.`;
   if (options?.applied) {
-    return `${summary} Codex history rewritten.`;
+    return `${summary} ${options.label ?? "Codex"} history rewritten.`;
   }
   return summary;
 }
