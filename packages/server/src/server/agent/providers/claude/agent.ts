@@ -3566,6 +3566,10 @@ class ClaudeAgentSession implements AgentSession {
       hooks: this.buildSubagentEffortHooks(),
       ...(this.persistSession === undefined ? {} : { persistSession: this.persistSession }),
       env: sdkEnv,
+      ...(typeof sdkEnv.PASEO_JEV_PLUGIN_PATH === "string" &&
+      sdkEnv.PASEO_JEV_PLUGIN_PATH.length > 0
+        ? { plugins: [{ type: "local" as const, path: sdkEnv.PASEO_JEV_PLUGIN_PATH }] }
+        : {}),
     };
 
     if (this.config.mcpServers) {

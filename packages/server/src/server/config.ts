@@ -25,6 +25,7 @@ import { resolveSpeechConfig } from "./speech/speech-config-resolver.js";
 import type { RequestedSpeechProviders } from "./speech/speech-types.js";
 import { mergeHostnames, parseHostnamesEnv, type HostnamesConfig } from "./hostnames.js";
 import { resolveGitProcessPolicy } from "../utils/git-process-scheduler.js";
+import { resolveJevConfig } from "./jev/defaults.js";
 
 export {
   loadPersistedConfig,
@@ -539,6 +540,7 @@ function resolveStaticLoadConfigSettings(
     mcpInjectIntoAgents:
       cli?.mcpInjectIntoAgents ?? persisted.daemon?.mcp?.injectIntoAgents ?? false,
     browserToolsEnabled: resolveBrowserToolsEnabled(persisted),
+    jev: resolveJevConfig(persisted.daemon?.jev),
     autoArchiveAfterMerge: persisted.daemon?.autoArchiveAfterMerge ?? false,
     appendSystemPrompt: resolveAppendSystemPrompt(persisted),
     ...resolveProfileLists(persisted),
@@ -574,6 +576,7 @@ export function resolveConfigFromPersisted(
     mcpEnabled,
     mcpInjectIntoAgents,
     browserToolsEnabled,
+    jev,
     autoArchiveAfterMerge,
     appendSystemPrompt,
     terminalProfiles,
@@ -617,6 +620,7 @@ export function resolveConfigFromPersisted(
     mcpEnabled,
     mcpInjectIntoAgents,
     browserToolsEnabled,
+    jev,
     git: resolveGitProcessConfig(env, persisted),
     autoArchiveAfterMerge,
     enableTerminalAgentHooks: persisted.daemon?.enableTerminalAgentHooks ?? false,
