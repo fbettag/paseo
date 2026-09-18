@@ -83,7 +83,7 @@ function removeJevHooks(value: unknown): Record<string, unknown>[] {
   return kept;
 }
 
-function jevPostToolGroup(): Record<string, unknown> {
+export function jevPostToolGroup(): Record<string, unknown> {
   return {
     matcher: "",
     hooks: [
@@ -95,6 +95,19 @@ function jevPostToolGroup(): Record<string, unknown> {
         statusMessage: "Jev tool admission",
       },
     ],
+  };
+}
+
+export function mergeCodexJevHooks(config: Record<string, unknown>): Record<string, unknown> {
+  const existing = isRecord(config.hooks) ? config.hooks : {};
+  const postTool = Array.isArray(existing.PostToolUse) ? existing.PostToolUse : [];
+  const without = postTool.filter((entry) => !isRecord(entry) || !groupHasJevHook(entry));
+  return {
+    ...config,
+    hooks: {
+      ...existing,
+      PostToolUse: [...without, jevPostToolGroup()],
+    },
   };
 }
 

@@ -116,6 +116,7 @@ import {
   CodexProviderOptionsSchema,
   type CodexProviderOptions,
 } from "./codex/options.js";
+import { mergeCodexJevHooks } from "../../jev/codex-hook-install.js";
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -5360,7 +5361,9 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       innerConfig.mcp_servers = mcpServers;
     }
-    const configured = applyCodexToolPolicy(innerConfig, this.config.toolPolicy);
+    const configured = mergeCodexJevHooks(
+      applyCodexToolPolicy(innerConfig, this.config.toolPolicy),
+    );
     return Object.keys(configured).length > 0 ? configured : null;
   }
 
