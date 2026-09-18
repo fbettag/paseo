@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import type { Logger } from "pino";
 
 import { DEFAULT_JEV_API_KEY_FILE, DEFAULT_JEV_BASE_URL } from "./defaults.js";
 
@@ -43,6 +44,7 @@ export interface JevClientOptions {
   apiKey?: string;
   apiKeyFile?: string;
   fetch?: typeof fetch;
+  logger?: Logger;
 }
 
 export class JevRequestError extends Error {
@@ -79,10 +81,19 @@ export function noulAnswer(answers: JevAnswers, name: string): number {
   return noul;
 }
 
+function requestHost(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return "invalid-url";
+  }
+}
+
 export class JevClient {
   private readonly url: string;
   private readonly apiKey: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly logger?: Logger;
 
   constructor(options: JevClientOptions = {}) {
     const apiKey = resolveJevApiKey(options);
@@ -92,40 +103,72 @@ export class JevClient {
     this.apiKey = apiKey;
     this.url = options.baseUrl?.trim() || DEFAULT_JEV_BASE_URL;
     this.fetchImpl = options.fetch ?? fetch;
+    this.logger = options.logger;
   }
 
   async ask(params: JevAskParams): Promise<JevAnswers> {
-    const response = await this.fetchImpl(this.url, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: params.model ?? JEV_DEFAULT_MODEL,
-        state: params.state,
-        questions: params.questions,
-      }),
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      throw new JevRequestError(`Jev request failed (${response.status}): ${text.slice(0, 200)}`);
-    }
-    let parsed: unknown;
+    const model = params.model ?? JEV_DEFAULT_MODEL;
+    const questionIds = Object.keys(params.questions);
+    const startedAt = Date.now();
+    this.logger?.info({ host: requestHost(this.url), model, questionIds }, "Jev request started");
     try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new JevRequestError("Jev returned malformed JSON");
+      const response = await this.fetchImpl(this.url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          state: params.state,
+          questions: params.questions,
+        }),
+      });
+      const text = await response.text();
+      const durationMs = Date.now() - startedAt;
+      if (!response.ok) {
+        throw new JevRequestError(`Jev request failed (${response.status}): ${text.slice(0, 200)}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new JevRequestError("Jev returned malformed JSON");
+      }
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        !("answers" in parsed) ||
+        parsed.answers === null ||
+        typeof parsed.answers !== "object"
+      ) {
+        throw new JevRequestError("Jev response is missing answers");
+      }
+      const answers = parsed.answers as JevAnswers;
+      this.logger?.info(
+        {
+          host: requestHost(this.url),
+          model,
+          questionIds,
+          status: response.status,
+          durationMs,
+          answerIds: Object.keys(answers),
+        },
+        "Jev request succeeded",
+      );
+      return answers;
+    } catch (error) {
+      this.logger?.warn(
+        {
+          host: requestHost(this.url),
+          model,
+          questionIds,
+          durationMs: Date.now() - startedAt,
+          err: error,
+        },
+        "Jev request failed",
+      );
+      throw error;
     }
-    if (
-      parsed === null ||
-      typeof parsed !== "object" ||
-      !("answers" in parsed) ||
-      parsed.answers === null ||
-      typeof parsed.answers !== "object"
-    ) {
-      throw new JevRequestError("Jev response is missing answers");
-    }
-    return parsed.answers as JevAnswers;
   }
 }
