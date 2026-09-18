@@ -33,7 +33,7 @@ function workspace(
 }
 
 describe("compact project workspace targets", () => {
-  it("groups normal workspaces and schedule runs into one target each", () => {
+  it("merges manual work and multiple schedules into one project target", () => {
     const oldWork = workspace({
       workspaceKey: "host-a:work-old",
       workspaceId: "work-old",
@@ -64,16 +64,10 @@ describe("compact project workspace targets", () => {
       selection: null,
     });
 
-    expect(targets).toHaveLength(2);
+    expect(targets).toHaveLength(1);
     expect(targets[0]).toMatchObject({
-      key: "project:project-a:work",
+      key: "project:project-a",
       workspace: runningWork,
-      statusBucket: "running",
-      selected: false,
-    });
-    expect(targets[1]).toMatchObject({
-      key: "project:project-a:schedule",
-      workspace: runningRun,
       statusBucket: "running",
       selected: false,
     });
@@ -134,6 +128,44 @@ describe("compact project workspace targets", () => {
     });
   });
 
+  it.each(["needs_input", "failed"] as const)(
+    "keeps manual %s visible while multiple schedules run",
+    (statusBucket) => {
+      const manual = workspace({
+        workspaceKey: "host-a:manual",
+        workspaceId: "manual",
+        statusBucket,
+      });
+      const runs = ["schedule-1", "schedule-2"].map((scheduleId) =>
+        workspace({
+          workspaceKey: `host-a:${scheduleId}`,
+          workspaceId: scheduleId,
+          scheduleId,
+          statusBucket: "running",
+        }),
+      );
+      expect(
+        buildCompactProjectWorkspaceTargets({ workspaces: [...runs, manual], selection: null }),
+      ).toEqual([{ key: "project:project-a", workspace: manual, statusBucket, selected: false }]);
+    },
+  );
+
+  it("groups old retained runs on first load before schedule ownership is reconciled", () => {
+    const manual = workspace({ workspaceKey: "host-a:manual", workspaceId: "manual" });
+    const oldRuns = ["old-run-1", "old-run-2"].map((workspaceId) =>
+      workspace({ workspaceKey: `host-a:${workspaceId}`, workspaceId, scheduleId: null }),
+    );
+    const input = { workspaces: [manual, ...oldRuns], selection: null };
+    const initialTargets = buildCompactProjectWorkspaceTargets(input);
+    expect(initialTargets).toEqual([
+      { key: "project:project-a", workspace: manual, statusBucket: "done", selected: false },
+    ]);
+    for (const run of oldRuns) {
+      run.scheduleId = "restored-schedule";
+    }
+    expect(buildCompactProjectWorkspaceTargets(input)).toEqual(initialTargets);
+  });
+
   it("keeps different projects separate", () => {
     const projectA = workspace({
       workspaceKey: "host-a:project-a",
@@ -150,6 +182,6 @@ describe("compact project workspace targets", () => {
         workspaces: [projectA, projectB],
         selection: null,
       }).map((target) => target.key),
-    ).toEqual(["project:project-a:work", "project:project-b:work"]);
+    ).toEqual(["project:project-a", "project:project-b"]);
   });
 });

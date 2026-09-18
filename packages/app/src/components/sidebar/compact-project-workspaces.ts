@@ -44,10 +44,9 @@ export function buildCompactProjectWorkspaceTargets(input: {
   const groups = new Map<string, TargetGroup>();
 
   for (const workspace of input.workspaces) {
-    // Compact mode exposes one work target and one schedule target per project. Rows mode
-    // still exposes every underlying workspace and schedule run.
-    const kind = workspace.scheduleId ? "schedule" : "work";
-    const key = `project:${workspace.projectViewKey}:${kind}`;
+    // One indicator per project: manual workspaces and retained schedule runs
+    // share a status, including runs that still lack scheduleId on first load.
+    const key = `project:${workspace.projectViewKey}`;
     const group = groups.get(key);
     if (group) {
       group.workspaces.push(workspace);
