@@ -116,7 +116,7 @@ import {
   CodexProviderOptionsSchema,
   type CodexProviderOptions,
 } from "./codex/options.js";
-import { mergeCodexJevHooks } from "../../jev/codex-hook-install.js";
+import { admitCodexExecOutput, type CodexJevAdmit } from "../../jev/admit-codex-exec.js";
 
 function assertChildWithPipes(
   child: ChildProcess,
@@ -273,6 +273,7 @@ interface CodexAppServerClientLike {
 
 interface CodexAppServerAgentDeps {
   environment?: Record<string, string>;
+  jevAdmit?: CodexJevAdmit;
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {
     id: string;
@@ -3522,6 +3523,7 @@ export class CodexAppServerAgentSession implements AgentSession {
     name: string;
   } | null = null;
   private cachedSkills: Array<{ name: string; description: string; path: string }> | null = null;
+  private jevAdmitQueue: Promise<void> = Promise.resolve();
 
   private readonly usageSessionKey = randomUUID();
   private readonly harnessEnvironment: Record<string, string>;
@@ -5361,9 +5363,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       }
       innerConfig.mcp_servers = mcpServers;
     }
-    const configured = mergeCodexJevHooks(
-      applyCodexToolPolicy(innerConfig, this.config.toolPolicy),
-    );
+    const configured = applyCodexToolPolicy(innerConfig, this.config.toolPolicy);
     return Object.keys(configured).length > 0 ? configured : null;
   }
 
@@ -6414,20 +6414,41 @@ export class CodexAppServerAgentSession implements AgentSession {
     if (!subAgentCallId) {
       this.rememberTerminalProcessForCommand(parsed.command, resolvedOutput);
     }
+    const callId = typeof parsed.callId === "string" ? parsed.callId : undefined;
+    if (callId && !subAgentCallId) {
+      this.emittedExecCommandCompletedCallIds.add(callId);
+    }
+    this.jevAdmitQueue = this.jevAdmitQueue
+      .then(() => this.emitAdmittedExecCommand(parsed, resolvedOutput, subAgentCallId))
+      .catch((error) => {
+        this.logger.warn({ err: error }, "Jev Codex exec admission failed open");
+      });
+  }
+
+  private async emitAdmittedExecCommand(
+    parsed: Extract<ParsedCodexNotification, { kind: "exec_command_completed" }>,
+    resolvedOutput: string | null | undefined,
+    subAgentCallId: string | null,
+  ): Promise<void> {
+    const isError =
+      parsed.success === false || (typeof parsed.exitCode === "number" && parsed.exitCode !== 0);
+    const admitted = await admitCodexExecOutput(this.deps.jevAdmit, {
+      command: parsed.command,
+      output: resolvedOutput,
+      stderr: parsed.stderr,
+      isError,
+    });
     const timelineItem = mapCodexExecNotificationToToolCall({
       callId: parsed.callId,
       command: parsed.command,
       cwd: parsed.cwd ?? this.config.cwd ?? null,
-      output: resolvedOutput,
+      output: admitted.output,
       exitCode: parsed.exitCode,
       success: parsed.success,
       stderr: parsed.stderr,
       running: false,
     });
     if (timelineItem) {
-      if (!subAgentCallId) {
-        this.emittedExecCommandCompletedCallIds.add(timelineItem.callId);
-      }
       this.emitCodexToolTimelineItem(timelineItem, subAgentCallId, parsed.threadId);
     }
   }
@@ -7173,10 +7194,11 @@ export class CodexAppServerAgentClient implements AgentClient {
     private readonly deps: CodexAppServerAgentDeps = {},
   ) {}
 
-  private sessionDeps(launchEnv: Record<string, string> | undefined): CodexAppServerAgentDeps {
+  private sessionDeps(launchContext?: AgentLaunchContext): CodexAppServerAgentDeps {
     return {
       ...this.deps,
-      codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
+      jevAdmit: launchContext?.jevAdmit ?? this.deps.jevAdmit,
+      codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchContext?.env)),
       customCodexConfig: this.customProviderConfig(),
     };
   }
@@ -7242,16 +7264,9 @@ export class CodexAppServerAgentClient implements AgentClient {
     options?: { goalsEnabled?: boolean; agentId?: string; environment?: Record<string, string> },
   ): Promise<ChildProcessWithoutNullStreams> {
     const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
-    const args = [...launchPrefix.args];
-    if (launchEnv?.PASEO_JEV_TOOL_ADMISSION === "1") {
-      args.push("--dangerously-bypass-hook-trust");
-    }
-    args.push("app-server");
+    const args = [...launchPrefix.args, "app-server"];
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
-    }
-    if (launchEnv?.PASEO_JEV_TOOL_ADMISSION === "1") {
-      args.push("--enable", "hooks");
     }
     this.logger.trace(
       {
@@ -7297,7 +7312,7 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      { ...this.sessionDeps(launchContext), environment },
       options?.persistSession === false,
       goalsEnabled,
       autoReviewEnabled,
@@ -7334,7 +7349,7 @@ export class CodexAppServerAgentClient implements AgentClient {
           agentId: launchContext?.agentId,
           environment,
         }),
-      { ...this.sessionDeps(launchContext?.env), environment },
+      { ...this.sessionDeps(launchContext), environment },
       false,
       goalsEnabled,
       autoReviewEnabled,
