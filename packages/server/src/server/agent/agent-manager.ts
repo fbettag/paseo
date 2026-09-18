@@ -5189,6 +5189,17 @@ export class AgentManager {
       env = transformed.env;
     }
     const jevEnv = this.jevPolicy?.compactEnabled() ? this.jevPolicy.claudeLaunchEnv() : undefined;
+    if (jevEnv) {
+      this.logger.info(
+        {
+          agentId,
+          provider: client.provider,
+          hasApiKeyFile: Boolean(jevEnv.TYPESAFE_API_KEY_FILE),
+          hasPluginPath: Boolean(jevEnv.PASEO_JEV_PLUGIN_PATH || process.env.PASEO_JEV_PLUGIN_PATH),
+        },
+        "Jev compact env applied to agent launch",
+      );
+    }
     const context: AgentLaunchContext = {
       agentId,
       env: {

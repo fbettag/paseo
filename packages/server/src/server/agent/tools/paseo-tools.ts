@@ -626,13 +626,20 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       const parsedInput = await parseToolInput(tool, input);
       const result = await tool.handler(parsedInput, context);
       if (!options.jevPolicy?.toolAdmissionEnabled()) {
+        childLogger.debug({ toolName: name }, "Jev admission skipped (disabled)");
         return result;
       }
       const client = options.jevPolicy.createClient();
       if (!client) {
+        childLogger.debug({ toolName: name }, "Jev admission skipped (client unavailable)");
         return result;
       }
-      return admitPaseoToolResult(client, { toolName: name, input: parsedInput, result });
+      return admitPaseoToolResult(client, {
+        toolName: name,
+        input: parsedInput,
+        result,
+        logger: childLogger,
+      });
     },
   });
 

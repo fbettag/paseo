@@ -613,7 +613,8 @@ export async function createPaseoDaemon(
   });
   const browserToolsPolicy = new DaemonConfigBrowserToolsPolicy(daemonConfigStore);
   const browserToolsBroker = new BrowserToolsBroker({});
-  const jevPolicy = new DaemonConfigJevPolicy(daemonConfigStore);
+  const jevPolicy = new DaemonConfigJevPolicy(daemonConfigStore, logger);
+  jevPolicy.reportStartup();
   const pluginRuntime = new PluginService(logger, daemonConfigStore, daemonVersion, {
     managedSources: new ManagedPluginSources(config.paseoHome),
     settingsDirectory: path.join(config.paseoHome, "plugin-settings"),
