@@ -12,6 +12,7 @@ export interface AdmitTextResultInput {
   isError?: boolean;
   keepThreshold?: number;
   truncateHeadChars?: number;
+  instructions?: string;
   logger?: Logger;
 }
 
@@ -62,6 +63,7 @@ export async function admitToolResultText(
         keepResult: {
           type: "noul",
           instructions:
+            input.instructions ??
             "The coding agent just received this tool result. Is the full verbatim output still needed, or would a short head plus a length note be enough because the tool can be re-run?",
         },
       },

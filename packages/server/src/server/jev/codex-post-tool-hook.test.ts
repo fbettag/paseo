@@ -32,6 +32,7 @@ function clientWithNoul(noul: number) {
 describe("handleCodexJevPostToolHook", () => {
   it("extracts shell output text", () => {
     expect(toolResponseText({ output: "hello" })).toBe("hello");
+    expect(toolResponseText({ stdout: "out", stderr: "err" })).toBe("out\nerr");
     expect(toolResponseText("raw")).toBe("raw");
   });
 
@@ -43,7 +44,7 @@ describe("handleCodexJevPostToolHook", () => {
         env: {},
         client: clientWithNoul(0),
       }),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ stdout: null, decision: "skip_env" });
   });
 
   it("no-ops for other events", async () => {
@@ -54,7 +55,17 @@ describe("handleCodexJevPostToolHook", () => {
         env,
         client: clientWithNoul(0),
       }),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ stdout: null, decision: "skip_event" });
+  });
+
+  it("truncates when Jev is below the Codex keep threshold", async () => {
+    const outcome = await handleCodexJevPostToolHook({
+      event: "PostToolUse",
+      stdin: event(),
+      env,
+      client: clientWithNoul(0.65),
+    });
+    expect(outcome.decision).toBe("truncate");
   });
 
   it("keeps long results that Jev wants", async () => {
@@ -63,20 +74,21 @@ describe("handleCodexJevPostToolHook", () => {
         event: "PostToolUse",
         stdin: event(),
         env,
-        client: clientWithNoul(0.9),
+        client: clientWithNoul(0.95),
       }),
-    ).resolves.toBeNull();
+    ).resolves.toMatchObject({ stdout: null, decision: "keep", noul: 0.95 });
   });
 
   it("replaces long results that Jev drops", async () => {
-    const stdout = await handleCodexJevPostToolHook({
+    const outcome = await handleCodexJevPostToolHook({
       event: "PostToolUse",
       stdin: event(),
       env,
       client: clientWithNoul(0.1),
     });
-    expect(stdout).toBeTruthy();
-    const parsed = JSON.parse(stdout ?? "{}") as {
+    expect(outcome.decision).toBe("truncate");
+    expect(outcome.stdout).toBeTruthy();
+    const parsed = JSON.parse(outcome.stdout ?? "{}") as {
       decision: string;
       reason: string;
       hookSpecificOutput: { hookEventName: string };

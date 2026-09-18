@@ -7093,6 +7093,9 @@ export class CodexAppServerAgentClient implements AgentClient {
     if (options?.goalsEnabled) {
       args.push("--enable", "goals");
     }
+    if (launchEnv?.PASEO_JEV_TOOL_ADMISSION === "1") {
+      args.push("--enable", "hooks");
+    }
     this.logger.trace(
       {
         agentId: options?.agentId,
