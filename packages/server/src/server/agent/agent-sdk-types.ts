@@ -633,6 +633,20 @@ export interface AgentLaunchContext {
    * AgentSessionConfig; providers may adapt it to their native tool surface.
    */
   paseoTools?: PaseoToolCatalog;
+  /**
+   * Runtime-only Jev admission for native provider tool results.
+   * Never persist this; providers must not write it into session metadata.
+   */
+  jevAdmit?: (input: {
+    toolName: string;
+    input: unknown;
+    text: string;
+    isError?: boolean;
+  }) => Promise<{
+    decision: "keep" | "truncate" | "skip_short" | "skip_error" | "fail_open";
+    text: string;
+    noul?: number;
+  }>;
 }
 
 export interface AgentCreateSessionOptions {
