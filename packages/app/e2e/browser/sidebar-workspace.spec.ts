@@ -139,9 +139,7 @@ test.describe("Sidebar workspace list", () => {
     }
   });
 
-  test("compact project rows expose workspace status targets without child rows", async ({
-    page,
-  }) => {
+  test("compact project rows keep one status target and all workspace rows", async ({ page }) => {
     const project = await seedCompactProjectWorkspaces();
 
     try {
@@ -149,9 +147,16 @@ test.describe("Sidebar workspace list", () => {
       await expectSidebarWorkspaceRows(page, project.workspaceIds);
       await selectSidebarProjectWorkspaceDisplay(page, "compact");
       await expectCompactProjectWorkspaceTargets(page, project);
+      await expectSidebarWorkspaceRows(page, project.workspaceIds);
 
       await page.getByTestId(`sidebar-project-row-${project.projectViewKey}`).click();
+      await expect(
+        page.getByTestId(`sidebar-workspace-list-${project.projectViewKey}`),
+      ).toHaveCount(0);
       await expectCompactProjectWorkspaceTargets(page, project);
+
+      await page.getByTestId(`sidebar-project-row-${project.projectViewKey}`).click();
+      await expectSidebarWorkspaceRows(page, project.workspaceIds);
 
       const target = compactProjectWorkspaceTarget(page, project.projectViewKey);
       const title = await target.getAttribute("aria-label");
@@ -168,6 +173,7 @@ test.describe("Sidebar workspace list", () => {
 
       await page.reload();
       await expectCompactProjectWorkspaceTargets(page, project);
+      await expectSidebarWorkspaceRows(page, project.workspaceIds);
     } finally {
       await project.cleanup();
     }

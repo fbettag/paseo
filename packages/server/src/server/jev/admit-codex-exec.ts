@@ -4,9 +4,9 @@ export type CodexJevAdmit = (
   input: Pick<AdmitTextResultInput, "toolName" | "input" | "text" | "isError">,
 ) => Promise<AdmitTextResult>;
 
-export const CODEX_KEEP_THRESHOLD = 0.7;
+export const CODEX_KEEP_THRESHOLD = 0.85;
 export const CODEX_ADMIT_INSTRUCTIONS =
-  "Long coding-agent tool output. Prefer truncating dumps that can be reproduced by re-running the same command. Keep the full verbatim bytes only if the next step clearly needs them.";
+  "Shell and command dumps that can be reproduced by re-running the same command should be truncated. Keep the full verbatim bytes only when the next edit or diagnosis clearly needs the exact lines.";
 
 export function combineCodexExecText(output?: string | null, stderr?: string | null): string {
   return [output, stderr]

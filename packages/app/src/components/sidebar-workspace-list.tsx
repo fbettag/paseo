@@ -1727,19 +1727,19 @@ function ProjectBlock({
     canToggle: canToggleWorkspaces,
     toggleExpanded: toggleWorkspacesExpanded,
   } = useLimitedSidebarGroup(project.workspaces);
-  const projectCollapsed = compact || collapsed;
   const rowModel = useMemo(
     () =>
       buildSidebarProjectRowModel({
         project,
-        collapsed: projectCollapsed,
+        collapsed,
         supportsMultiplicityByServerId,
       }),
-    [project, projectCollapsed, supportsMultiplicityByServerId],
+    [project, collapsed, supportsMultiplicityByServerId],
   );
 
   // Collapsed rows hide their workspace rows, so the project row carries the most urgent
   // status among them; expanded rows leave the signal to the child rows themselves.
+  // Compact mode still expands: it only aggregates the header status target.
   const aggregateStatusBucket = useSidebarProjectStatusBucket({
     workspaces: project.workspaces,
     enabled: collapsed && !compact,
@@ -1891,18 +1891,11 @@ function ProjectBlock({
     onToggleCollapsed(project.viewKey);
   }, [onToggleCollapsed, project.viewKey]);
   const handleProjectPress = useCallback(() => {
-    if (!compact) {
-      handleToggleCollapsed();
-      return;
-    }
-    const workspace = compactWorkspaces[0]?.workspace;
-    if (!workspace) return;
-    onWorkspacePress?.();
-    navigateToWorkspace({ serverId: workspace.serverId, workspaceId: workspace.workspaceId });
-  }, [compact, compactWorkspaces, handleToggleCollapsed, onWorkspacePress]);
+    handleToggleCollapsed();
+  }, [handleToggleCollapsed]);
 
   let projectChildren = null;
-  if (!projectCollapsed) {
+  if (!collapsed) {
     if (project.workspaces.length > 0) {
       projectChildren = (
         <>
@@ -1953,7 +1946,7 @@ function ProjectBlock({
         iconDataUri={iconDataUri}
         statusBucket={aggregateStatusBucket}
         selected={false}
-        chevron={compact ? null : rowModel.chevron}
+        chevron={rowModel.chevron}
         onPress={handleProjectPress}
         worktreeTarget={
           rowModel.trailingAction.kind === "new_workspace" ? rowModel.trailingAction.target : null
