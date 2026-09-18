@@ -213,12 +213,8 @@ export function sidebarWorkspaceRow(page: Page, workspaceId: string): Locator {
   return page.getByTestId(`sidebar-workspace-row-${getServerId()}:${workspaceId}`);
 }
 
-export function compactProjectWorkspaceTarget(
-  page: Page,
-  projectViewKey: string,
-  kind: "work" | "schedule",
-): Locator {
-  return page.getByTestId(`sidebar-project-workspace-target-project:${projectViewKey}:${kind}`);
+export function compactProjectWorkspaceTarget(page: Page, projectViewKey: string): Locator {
+  return page.getByTestId(`sidebar-project-workspace-target-project:${projectViewKey}`);
 }
 
 export async function expectSidebarWorkspaceRows(
@@ -237,24 +233,18 @@ export async function expectCompactProjectWorkspaceTargets(
   for (const workspaceId of input.workspaceIds) {
     await expect(sidebarWorkspaceRow(page, workspaceId)).toHaveCount(0);
   }
-  await expect(compactProjectWorkspaceTarget(page, input.projectViewKey, "work")).toHaveCount(1, {
+  await expect(compactProjectWorkspaceTarget(page, input.projectViewKey)).toHaveCount(1, {
     timeout: 30_000,
   });
-  await expect(compactProjectWorkspaceTarget(page, input.projectViewKey, "schedule")).toHaveCount(
-    1,
-    { timeout: 30_000 },
-  );
 }
 
 export async function expectCompactProjectWorkspaceTooltip(
   page: Page,
-  input: { projectViewKey: string; kind: "work" | "schedule"; title: string },
+  input: { projectViewKey: string; title: string },
 ): Promise<void> {
-  await compactProjectWorkspaceTarget(page, input.projectViewKey, input.kind).hover();
+  await compactProjectWorkspaceTarget(page, input.projectViewKey).hover();
   await expect(
-    page.getByTestId(
-      `sidebar-project-workspace-tooltip-project:${input.projectViewKey}:${input.kind}`,
-    ),
+    page.getByTestId(`sidebar-project-workspace-tooltip-project:${input.projectViewKey}`),
   ).toHaveText(input.title);
 }
 
