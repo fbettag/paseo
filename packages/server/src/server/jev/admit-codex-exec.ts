@@ -14,6 +14,32 @@ export function combineCodexExecText(output?: string | null, stderr?: string | n
     .join("\n");
 }
 
+export function commandExecutionOutput(item: { [key: string]: unknown }): string {
+  return typeof item.aggregatedOutput === "string" ? item.aggregatedOutput : "";
+}
+
+export function commandExecutionIsError(item: { [key: string]: unknown }): boolean {
+  const status = typeof item.status === "string" ? item.status : "";
+  const exitCode = item.exitCode;
+  return status === "failed" || (typeof exitCode === "number" && exitCode !== 0);
+}
+
+export async function admitCommandExecutionItem(
+  admit: CodexJevAdmit | undefined,
+  item: { [key: string]: unknown },
+): Promise<void> {
+  if (!admit) return;
+  const output = commandExecutionOutput(item);
+  const admitted = await admitCodexExecOutput(admit, {
+    command: item.command,
+    output,
+    isError: commandExecutionIsError(item),
+  });
+  if (admitted.output !== undefined && admitted.output !== output) {
+    item.aggregatedOutput = admitted.output;
+  }
+}
+
 export async function admitCodexExecOutput(
   admit: CodexJevAdmit | undefined,
   params: {
