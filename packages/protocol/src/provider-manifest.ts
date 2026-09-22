@@ -142,6 +142,16 @@ const OPENCODE_MODES: AgentProviderModeDefinition[] = [
   },
 ];
 
+const JEV_MODES: AgentProviderModeDefinition[] = [
+  {
+    id: "auto",
+    label: "Auto",
+    description: "Jev chooses an enabled model for the task",
+    icon: "Sparkles",
+    colorTier: "moderate",
+  },
+];
+
 export const OMP_MODES: AgentProviderModeDefinition[] = [
   {
     id: "full",
@@ -254,6 +264,13 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     enabledByDefault: false,
     defaultModeId: "full",
     modes: OMP_MODES,
+  },
+  {
+    id: "jev",
+    label: "Jev",
+    description: "Routes each task to a model that is enabled in Paseo",
+    defaultModeId: "auto",
+    modes: JEV_MODES,
   },
 ];
 
