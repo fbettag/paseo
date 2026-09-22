@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   classifyEnabledModel,
+  heuristicRouteJudgment,
+  isContinuationCue,
   routeModels,
+  routeTaskText,
   type ClassifiedModel,
   type EnabledModel,
   type RouteJudgment,
@@ -224,6 +227,52 @@ describe("routeModels", () => {
       blockedProviderIds: new Set(CATALOG.map((entry) => entry.providerId)),
     });
     expect(decision).toBeNull();
+  });
+
+  it("treats continue as the earlier task, not as a new quick prompt", () => {
+    const earlier =
+      "redesign the authentication layer and the threat model for every service in this repository";
+    expect(isContinuationCue("continue")).toBe(true);
+    expect(isContinuationCue("continue, and redesign auth")).toBe(false);
+    const task = routeTaskText("continue", [earlier]);
+    expect(task).toContain("authentication");
+    expect(task).not.toBe("continue");
+    expect(heuristicRouteJudgment(task).kind).not.toBe("quick");
+  });
+
+  it("leaves a flash-only provider when the next step needs a stronger model", () => {
+    const catalog = [
+      model({
+        providerId: "claude",
+        providerLabel: "Claude",
+        modelId: "claude-haiku-4-5",
+        label: "Haiku",
+      }),
+      model({
+        providerId: "codex",
+        providerLabel: "Codex",
+        modelId: "gpt-5.6-sol",
+        label: "Sol",
+      }),
+    ];
+    const decision = routeModels(
+      catalog,
+      { kind: "reasoning", complexity: 0.9, capability: 0.9, deepReasoning: 0.8 },
+      {
+        pin: {
+          providerId: "claude",
+          modelId: "claude-haiku-4-5",
+          tier: "flash",
+          specialty: "general",
+          demand: 0.15,
+        },
+      },
+    );
+    expect(decision).toMatchObject({
+      providerId: "codex",
+      modelId: "gpt-5.6-sol",
+      kept: false,
+    });
   });
 
   it("leaves an exhausted account and picks another enabled provider", () => {

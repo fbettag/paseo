@@ -29,6 +29,7 @@ import {
   heuristicRouteJudgment,
   pinFromDecision,
   routeModels,
+  routeTaskText,
   type EnabledModel,
   type ModelSpecialty,
   type ModelTier,
@@ -182,6 +183,7 @@ class JevAgentSession implements AgentSession {
   private decision: RouteDecision | null = null;
   private permissionMode: JevPermissionMode;
   private providerModes: Readonly<Record<string, { id: string }[]>> = {};
+  private recentUserTexts: string[] = [];
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -353,16 +355,18 @@ class JevAgentSession implements AgentSession {
     if (!ports) {
       throw new Error("Jev routing is not connected to the daemon");
     }
+    const task = routeTaskText(text, this.recentUserTexts);
     const candidates = (await ports.listCandidates(this.config.cwd)).map(classifyEnabledModel);
     this.providerModes = (await ports.listProviderModes?.(this.config.cwd)) ?? this.providerModes;
     const blocked = await this.readBlockedProviders(ports);
     let judgment: RouteJudgment | null = null;
     try {
-      judgment = await ports.judge(text);
+      judgment = await ports.judge(task);
     } catch (error) {
       this.logger.warn({ err: error }, "Jev route judgment failed");
     }
-    const decision = routeModels(candidates, judgment ?? heuristicRouteJudgment(text), {
+    this.rememberUserText(text);
+    const decision = routeModels(candidates, judgment ?? heuristicRouteJudgment(task), {
       pin: this.decision ? pinFromDecision(this.decision) : null,
       blockedProviderIds: blocked,
     });
@@ -407,6 +411,13 @@ class JevAgentSession implements AgentSession {
 
   private mappedMode(providerId: string): string | undefined {
     return mapJevPermissionMode(this.permissionMode, this.providerModes[providerId] ?? []);
+  }
+
+  private rememberUserText(text: string): void {
+    const trimmed = text.trim().slice(0, 500);
+    if (!trimmed || trimmed.startsWith("/")) return;
+    this.recentUserTexts.push(trimmed);
+    if (this.recentUserTexts.length > 6) this.recentUserTexts.shift();
   }
 
   private async ensureProviderModes(): Promise<void> {
