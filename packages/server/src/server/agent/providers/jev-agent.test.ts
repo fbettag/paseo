@@ -4,10 +4,12 @@ import type {
   AgentCapabilityFlags,
   AgentMode,
   AgentPermissionRequest,
+  AgentPersistenceHandle,
   AgentPromptInput,
   AgentRunOptions,
   AgentRunResult,
   AgentSession,
+  AgentSessionConfig,
   AgentStreamEvent,
 } from "../agent-sdk-types.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
@@ -116,9 +118,15 @@ function ports(
   sessions: FakeSession[];
 } {
   const opened: Array<{ providerId: string; model?: string }> = [];
+  const resumed: Array<{
+    providerId: string;
+    config: Partial<AgentSessionConfig>;
+    handle: AgentPersistenceHandle;
+  }> = [];
   const sessions: FakeSession[] = [];
   return {
     opened,
+    resumed,
     sessions,
     ports: {
       listCandidates: () => Promise.resolve(MODELS),
@@ -129,7 +137,10 @@ function ports(
         sessions.push(session);
         return Promise.resolve(session);
       },
-      resumeSession: (providerId) => Promise.resolve(new FakeSession(providerId)),
+      resumeSession: (providerId, handle, config) => {
+        resumed.push({ providerId, handle, config });
+        return Promise.resolve(new FakeSession(providerId));
+      },
       blockedProviders: () => Promise.resolve(blocked),
     },
   };
@@ -215,5 +226,53 @@ describe("JevAgentClient", () => {
     expect(notices[1]).toContain("previous account unavailable");
     expect(harness.sessions[0]?.prompts).toEqual(["trace this exploit"]);
     expect(harness.sessions[1]?.prompts).toEqual(["continue the exploit trace"]);
+  });
+
+  it("resumes Claude with the routed model and a mapped bypass mode", async () => {
+    const harness = ports(async () => null);
+    harness.ports.listProviderModes = () =>
+      Promise.resolve({
+        claude: [{ id: "default" }, { id: "auto" }, { id: "bypassPermissions" }],
+      });
+    const client = new JevAgentClient(createTestLogger(), harness.ports);
+    await client.resumeSession(
+      {
+        provider: "jev",
+        sessionId: "claude-session",
+        metadata: {
+          routedProvider: "claude",
+          routedModel: "claude-haiku-4-5",
+          routedLabel: "Haiku 4.5",
+          providerLabel: "Claude",
+          inner: {
+            provider: "claude",
+            sessionId: "claude-session",
+            metadata: {
+              cwd: "/tmp/repo",
+              model: "auto",
+              modeId: "auto",
+              inner: {
+                provider: "claude",
+                sessionId: "claude-session",
+                metadata: { cwd: "/tmp/repo", model: "claude-haiku-4-5" },
+              },
+            },
+          },
+        },
+      },
+      { provider: "jev", cwd: "/tmp/repo", model: "auto", modeId: "bypass" },
+    );
+
+    expect(harness.resumed).toEqual([
+      {
+        providerId: "claude",
+        config: { cwd: "/tmp/repo", modeId: "bypassPermissions" },
+        handle: {
+          provider: "claude",
+          sessionId: "claude-session",
+          metadata: { cwd: "/tmp/repo", model: "claude-haiku-4-5" },
+        },
+      },
+    ]);
   });
 });
