@@ -1348,6 +1348,7 @@ function createToolCatalog(
       broker: options.browserToolsBroker,
       callerAgentId,
       resolveCallerAgent,
+      jevPolicy: options.jevPolicy,
     });
   }
 
