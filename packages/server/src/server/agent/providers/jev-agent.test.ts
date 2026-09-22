@@ -228,7 +228,21 @@ describe("JevAgentClient", () => {
     expect(harness.sessions[1]?.prompts).toEqual(["continue the exploit trace"]);
   });
 
-  it("resumes Claude with the routed model and a mapped bypass mode", async () => {
+  it("judges continue against the earlier task", async () => {
+    const seen: string[] = [];
+    const harness = ports(async (prompt) => {
+      seen.push(prompt);
+      return { kind: "quick", complexity: 0.1, capability: 0.1, deepReasoning: 0.1 };
+    });
+    const client = new JevAgentClient(createTestLogger(), harness.ports);
+    const session = await client.createSession({ provider: "jev", cwd: "/tmp/repo" });
+    await session.startTurn("redesign the authentication threat model across the services");
+    await session.startTurn("continue");
+    expect(seen[1]).toContain("authentication");
+    expect(seen[1]).not.toBe("continue");
+  });
+
+  it("resumes Claude with the routed model", async () => {
     const harness = ports(async () => null);
     harness.ports.listProviderModes = () =>
       Promise.resolve({
