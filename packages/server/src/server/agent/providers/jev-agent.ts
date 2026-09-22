@@ -28,8 +28,10 @@ import {
   classifyEnabledModel,
   heuristicRouteJudgment,
   pinFromDecision,
+  readJevReasoningEffort,
   routeModels,
   routeTaskText,
+  type JevReasoningEffort,
   type EnabledModel,
   type ModelSpecialty,
   type ModelTier,
@@ -67,6 +69,30 @@ const JEV_MODEL: AgentModelDefinition = {
   label: "Jev",
   description: "Routes to an enabled model",
   isDefault: true,
+  defaultThinkingOptionId: "auto",
+  thinkingOptions: [
+    {
+      id: "auto",
+      label: "Auto",
+      description: "Jev picks the tier for each step.",
+      isDefault: true,
+    },
+    {
+      id: "low",
+      label: "Low",
+      description: "Prefer a flash model.",
+    },
+    {
+      id: "medium",
+      label: "Medium",
+      description: "Stay on a standard model or stronger.",
+    },
+    {
+      id: "high",
+      label: "High",
+      description: "Use a strong model for this session.",
+    },
+  ],
 };
 
 const JEV_MODES: AgentMode[] = JEV_PERMISSION_MODES.map((mode) => ({
@@ -164,6 +190,7 @@ export class JevAgentClient {
       launchContext,
     );
     session.useProviderModes(providerModes);
+    session.restoreRouteMemory(handle.metadata);
     session.adopt(inner, routed.decision);
     return session;
   }
@@ -184,6 +211,7 @@ class JevAgentSession implements AgentSession {
   private permissionMode: JevPermissionMode;
   private providerModes: Readonly<Record<string, { id: string }[]>> = {};
   private recentUserTexts: string[] = [];
+  private reasoningEffort: JevReasoningEffort;
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -196,6 +224,7 @@ class JevAgentSession implements AgentSession {
     private readonly createOptions?: AgentCreateSessionOptions,
   ) {
     this.permissionMode = isJevPermissionMode(config.modeId) ? config.modeId : "auto";
+    this.reasoningEffort = readJevReasoningEffort(config.thinkingOptionId);
   }
 
   get id(): string | null {
@@ -208,6 +237,13 @@ class JevAgentSession implements AgentSession {
 
   useProviderModes(modes: Readonly<Record<string, { id: string }[]>>): void {
     this.providerModes = modes;
+  }
+
+  restoreRouteMemory(metadata: AgentMetadata | undefined): void {
+    const recent = metadata?.recentUserTexts;
+    if (!Array.isArray(recent)) return;
+    const texts = recent.filter((entry): entry is string => typeof entry === "string");
+    this.recentUserTexts = texts.slice(-6);
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {
@@ -253,6 +289,7 @@ class JevAgentSession implements AgentSession {
       sessionId: inner?.sessionId ?? null,
       model: "auto",
       modeId: this.permissionMode,
+      thinkingOptionId: this.reasoningEffort,
       extra: this.decision
         ? {
             routedProvider: this.decision.providerId,
@@ -283,6 +320,10 @@ class JevAgentSession implements AgentSession {
     if (!inner?.setMode || !providerId) return;
     const mapped = mapJevPermissionMode(modeId, this.providerModes[providerId] ?? []);
     if (mapped) await inner.setMode(mapped);
+  }
+
+  async setThinkingOption(thinkingOptionId: string | null): Promise<void> {
+    this.reasoningEffort = readJevReasoningEffort(thinkingOptionId);
   }
 
   getPendingPermissions(): AgentPermissionRequest[] {
@@ -317,6 +358,7 @@ class JevAgentSession implements AgentSession {
         specialty: decision.specialty,
         kind: decision.kind,
         demand: decision.demand,
+        recentUserTexts: this.recentUserTexts,
         inner,
       },
     };
@@ -369,6 +411,7 @@ class JevAgentSession implements AgentSession {
     const decision = routeModels(candidates, judgment ?? heuristicRouteJudgment(task), {
       pin: this.decision ? pinFromDecision(this.decision) : null,
       blockedProviderIds: blocked,
+      reasoningEffort: this.reasoningEffort,
     });
     if (!decision) {
       if (candidates.length > 0 && blocked.size > 0) {
@@ -391,6 +434,7 @@ class JevAgentSession implements AgentSession {
     if (!this.inner || (this.decision && decision.providerId !== this.decision.providerId)) {
       return this.openProvider(ports, decision);
     }
+    // A different model id starts a new provider prefix cache. Same id keeps it.
     if (
       this.decision &&
       this.decision.providerId === decision.providerId &&

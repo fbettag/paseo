@@ -158,6 +158,13 @@ describe("JevAgentClient", () => {
     const catalog = await client.fetchCatalog({ scope: "global", force: false });
     expect(catalog.models.map((model) => model.id)).toEqual(["auto"]);
     expect(catalog.models[0]?.label).toBe("Jev");
+    expect(catalog.models[0]?.defaultThinkingOptionId).toBe("auto");
+    expect(catalog.models[0]?.thinkingOptions?.map((option) => option.id)).toEqual([
+      "auto",
+      "low",
+      "medium",
+      "high",
+    ]);
 
     const session = await client.createSession({
       provider: "jev",
