@@ -49,6 +49,12 @@ import { PiRpcAgentClient } from "./providers/pi/agent.js";
 import { TraeACPAgentClient } from "./providers/trae-acp-agent.js";
 import { MockLoadTestAgentClient } from "./providers/mock-load-test-agent.js";
 import { MockSlowProviderClient } from "./providers/mock-slow-provider.js";
+import {
+  JevAgentClient,
+  JEV_ICON_SVG,
+  JEV_PROVIDER_ID,
+  type JevRouterPorts,
+} from "./providers/jev-agent.js";
 import { ClaudeProviderOptionsSchema } from "./providers/claude/options.js";
 import { CodexProviderOptionsSchema } from "./providers/codex/options.js";
 import { OpenCodeProviderOptionsSchema } from "./providers/opencode/options.js";
@@ -122,6 +128,7 @@ export interface BuildProviderRegistryOptions {
   isDev?: boolean;
   ompRuntime?: OmpRuntime;
   openCodeBridge?: OpenCodeBridge;
+  jevPorts?: JevRouterPorts;
 }
 
 interface ProviderClientFactoryOptions extends Pick<
@@ -129,6 +136,7 @@ interface ProviderClientFactoryOptions extends Pick<
   "workspaceGitService" | "managedProcesses" | "ompRuntime"
 > {
   openCodeBridge?: OpenCodeBridge;
+  jevPorts?: JevRouterPorts;
   providerParams?: unknown;
   customProvider?: {
     id: string;
@@ -244,6 +252,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
     }),
   mock: (logger) => new MockLoadTestAgentClient(logger),
   "mock-slow": () => new MockSlowProviderClient(),
+  jev: (logger, _runtimeSettings, options) => new JevAgentClient(logger, options?.jevPorts),
 };
 
 function getCursorACPCommand(
@@ -635,6 +644,7 @@ function createRegistryEntry(
   const { createBaseClient: _createBaseClient, contract: _contract, ...configuration } = resolved;
   return {
     ...resolved.definition,
+    ...(provider === JEV_PROVIDER_ID ? { iconSvg: JEV_ICON_SVG } : {}),
     configuration,
     enabled: resolved.enabled,
     derivedFromProviderId: resolved.derivedFromProviderId,
@@ -756,7 +766,7 @@ function buildResolvedBuiltinProviders(
   runtimeSettings: AgentProviderRuntimeSettingsMap | undefined,
   options: Pick<
     BuildProviderRegistryOptions,
-    "workspaceGitService" | "managedProcesses" | "ompRuntime" | "openCodeBridge"
+    "workspaceGitService" | "managedProcesses" | "ompRuntime" | "openCodeBridge" | "jevPorts"
   >,
   isDev: boolean,
 ): Map<string, ResolvedProvider> {
@@ -781,6 +791,7 @@ function buildResolvedBuiltinProviders(
             managedProcesses: options.managedProcesses,
             ompRuntime: options.ompRuntime,
             openCodeBridge: options.openCodeBridge,
+            jevPorts: options.jevPorts,
             providerParams: override?.params,
           }),
         contract: PROVIDER_CONTRACTS[definition.id] ?? UNSUPPORTED_PROVIDER_CONTRACT,
@@ -918,6 +929,7 @@ export function buildProviderRegistry(
       managedProcesses: options?.managedProcesses,
       ompRuntime: options?.ompRuntime,
       openCodeBridge: options?.openCodeBridge,
+      jevPorts: options?.jevPorts,
     },
     options?.isDev === true,
   );

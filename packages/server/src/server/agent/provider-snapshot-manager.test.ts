@@ -613,6 +613,7 @@ describe("ProviderSnapshotManager public surface", () => {
         copilot: { enabled: false },
         opencode: { enabled: false },
         pi: { enabled: false },
+        jev: { enabled: false },
       },
       extraClients: {
         codex: createExtraClient("codex", {
@@ -863,12 +864,13 @@ describe("ProviderSnapshotManager public surface", () => {
         copilot: { enabled: false },
         opencode: { enabled: false },
         pi: { enabled: false },
+        jev: { enabled: false },
       },
     });
     try {
       const entries = await manager.listProviders({ cwd: "/tmp/project", wait: true });
       const providers = entries.map((entry) => entry.provider).sort();
-      expect(providers).toEqual(["claude", "codex", "copilot", "omp", "opencode", "pi"]);
+      expect(providers).toEqual(["claude", "codex", "copilot", "jev", "omp", "opencode", "pi"]);
       for (const entry of entries) {
         expect(entry.enabled).toBe(false);
         expect(entry.status).toBe("unavailable");
@@ -3212,7 +3214,7 @@ test("result identity covers content, metadata and status while unchanged refres
 });
 
 const PUBLICATION_PROVIDERS = Object.fromEntries(
-  ["claude", "codex", "copilot", "opencode", "pi", "omp"].map((provider) => [
+  ["claude", "codex", "copilot", "opencode", "pi", "omp", "jev"].map((provider) => [
     provider,
     { enabled: provider === "codex" },
   ]),

@@ -752,6 +752,12 @@ export class VoiceAssistantWebSocketServer {
       });
     });
 
+    this.providerSnapshotManager.setJevUsageLookup(() =>
+      this.pluginRuntime
+        ? this.pluginRuntime.listLegacyUsage().then((result) => result.providers)
+        : Promise.resolve([]),
+    );
+
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();
     this.startApplicationSocketLeaseInterval();
