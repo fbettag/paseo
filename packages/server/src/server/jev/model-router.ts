@@ -24,11 +24,15 @@ export interface ClassifiedModel extends EnabledModel {
   isDefault: boolean;
 }
 
+export type JevReasoningEffort = "auto" | "low" | "medium" | "high";
+
 export interface RouteJudgment {
   kind: RouteKind;
   complexity: number;
   capability: number;
   deepReasoning: number;
+  stakes?: number;
+  correction?: number;
 }
 
 export interface RoutePin {
@@ -56,6 +60,7 @@ export interface RouteModelsOptions {
   pin?: RoutePin | null;
   pressure?: number;
   blockedProviderIds?: ReadonlySet<string>;
+  reasoningEffort?: JevReasoningEffort;
 }
 
 const CYBER_TOKENS = ["daybreak", "cyber", "cybersecurity"];
@@ -93,6 +98,10 @@ export function demandOf(judgment: RouteJudgment): number {
 
 const CONTINUATION_CUE =
   /^(?:please\s+)?(?:continue|weiter|mach weiter|und weiter|go on|keep going|proceed)\b[.!?]*$/i;
+const CORRECTION_CUE =
+  /komplexit|nicht verstanden|nochmal|noch mal|schau genauer|bevor du|überleg|ueberleg|look again|did not understand|didn't understand|wrong approach/i;
+const STAKES_CUE =
+  /docker|kubernetes|\bk8s\b|deploy|migrate|migration|postgres|datenbank|database|restart|collector|kollektor|monitor|dropdb|production|löschen|delete|stoppen|starten/i;
 
 export function isContinuationCue(text: string): boolean {
   const trimmed = text.trim();
@@ -114,18 +123,74 @@ export function routeTaskText(latest: string, recent: readonly string[]): string
   return body.slice(0, 4_000);
 }
 
+export function readJevReasoningEffort(value: string | null | undefined): JevReasoningEffort {
+  if (value === "low" || value === "medium" || value === "high" || value === "auto") return value;
+  return "auto";
+}
+
 export function heuristicRouteJudgment(prompt: string): RouteJudgment {
   const text = prompt.trim();
+  const stakes = STAKES_CUE.test(text) ? 0.7 : 0;
+  const correction = CORRECTION_CUE.test(text) ? 0.8 : 0;
   if (HEAVY_CYBER.test(text)) {
-    return { kind: "cyber_heavy", complexity: 0.85, capability: 0.9, deepReasoning: 0.8 };
+    return {
+      kind: "cyber_heavy",
+      complexity: 0.85,
+      capability: 0.9,
+      deepReasoning: 0.8,
+      stakes,
+      correction,
+    };
   }
   if (LIGHT_CYBER.test(text)) {
-    return { kind: "cyber_light", complexity: 0.45, capability: 0.5, deepReasoning: 0.3 };
+    return {
+      kind: "cyber_light",
+      complexity: 0.45,
+      capability: 0.5,
+      deepReasoning: 0.3,
+      stakes,
+      correction,
+    };
   }
-  if (text.length < 80) {
-    return { kind: "quick", complexity: 0.15, capability: 0.15, deepReasoning: 0.1 };
+  if (text.length < 80 && stakes < 0.5 && correction < 0.5) {
+    return {
+      kind: "quick",
+      complexity: 0.15,
+      capability: 0.15,
+      deepReasoning: 0.1,
+      stakes,
+      correction,
+    };
   }
-  return { kind: "coding", complexity: 0.55, capability: 0.55, deepReasoning: 0.4 };
+  return {
+    kind: "coding",
+    complexity: 0.55,
+    capability: 0.55,
+    deepReasoning: 0.4,
+    stakes,
+    correction,
+  };
+}
+
+export function prepareRouteJudgment(judgment: RouteJudgment): RouteJudgment {
+  const stakes = clamp01(judgment.stakes ?? 0);
+  const correction = clamp01(judgment.correction ?? 0);
+  let kind = judgment.kind;
+  let complexity = clamp01(judgment.complexity);
+  let capability = clamp01(judgment.capability);
+  let deepReasoning = clamp01(judgment.deepReasoning);
+  if (stakes >= 0.5 && kind === "quick") kind = "coding";
+  if (stakes >= 0.5) {
+    complexity = Math.max(complexity, 0.55);
+    capability = Math.max(capability, 0.55);
+  }
+  if (stakes >= 0.5 && correction >= 0.5 && kind !== "cyber_heavy" && kind !== "cyber_light") {
+    kind = "reasoning";
+    complexity = Math.max(complexity, 0.7);
+    capability = Math.max(capability, 0.75);
+    deepReasoning = Math.max(deepReasoning, 0.7);
+  }
+  return { kind, complexity, capability, deepReasoning, stakes, correction };
 }
 
 export function routeModels(
@@ -135,13 +200,32 @@ export function routeModels(
 ): RouteDecision | null {
   const available = modelsAcceptingWork(models, options?.blockedProviderIds);
   if (available.length === 0) return null;
-  const demand = demandOf(judgment);
-  const tier = targetTier(judgment.kind, demand, options?.pressure ?? 0);
-  const pool = eligibleModels(available, judgment.kind);
+  const prepared = prepareRouteJudgment(judgment);
+  const demand = demandOf(prepared);
+  const tier = applyReasoningEffort(
+    targetTier(prepared.kind, demand, options?.pressure ?? 0),
+    prepared.kind,
+    options?.reasoningEffort ?? "auto",
+  );
+  const allowStepDown =
+    prepared.kind === "quick" && (prepared.stakes ?? 0) < 0.4 && (prepared.correction ?? 0) < 0.4;
+  const pool = eligibleModels(available, prepared.kind);
   const picked = pickOne(modelsAtTier(pool, tier));
   const pin = options?.pin;
-  if (!pin) return toDecision(picked, judgment, demand, false, false);
+  if (!pin) return toDecision(picked, prepared, demand, false, false);
+  return routePinnedModel(available, pool, picked, prepared, demand, tier, allowStepDown, pin);
+}
 
+function routePinnedModel(
+  available: readonly ClassifiedModel[],
+  pool: readonly ClassifiedModel[],
+  picked: ClassifiedModel,
+  judgment: RouteJudgment,
+  demand: number,
+  tier: ModelTier,
+  allowStepDown: boolean,
+  pin: RoutePin,
+): RouteDecision {
   const pinned = available.find(
     (model) => model.providerId === pin.providerId && model.modelId === pin.modelId,
   );
@@ -149,20 +233,41 @@ export function routeModels(
     return toDecision(picked, judgment, demand, false, picked.providerId !== pin.providerId);
   }
 
+  const stepped = stepTier(tier, pinned.tier, allowStepDown);
   const onProvider = pool.filter((model) => model.providerId === pinned.providerId);
-  const atTier = modelsAtExactTier(onProvider, tier);
+  const atTier = modelsAtExactTier(onProvider, stepped);
   if (atTier.length > 0) {
-    const next = pickOne(atTier);
-    if (next.modelId === pinned.modelId) {
-      return toDecision(pinned, judgment, demand, true, false);
-    }
-    if (pinned.tier === tier && Math.abs(demand - pin.demand) < ROUTE_DEMAND_DEADBAND) {
-      return toDecision(pinned, judgment, demand, true, false);
-    }
-    return toDecision(next, judgment, demand, false, false);
+    return keepOrSwitch(pinned, pickOne(atTier), judgment, demand, pin.demand, stepped);
   }
+  return upgradeFromPin(onProvider, picked, pinned, judgment, demand, stepped);
+}
 
-  if (tierRank(tier) > tierRank(pinned.tier)) {
+function keepOrSwitch(
+  pinned: ClassifiedModel,
+  next: ClassifiedModel,
+  judgment: RouteJudgment,
+  demand: number,
+  pinDemand: number,
+  stepped: ModelTier,
+): RouteDecision {
+  if (next.modelId === pinned.modelId) {
+    return toDecision(pinned, judgment, demand, true, false);
+  }
+  if (pinned.tier === stepped && Math.abs(demand - pinDemand) < ROUTE_DEMAND_DEADBAND) {
+    return toDecision(pinned, judgment, demand, true, false);
+  }
+  return toDecision(next, judgment, demand, false, false);
+}
+
+function upgradeFromPin(
+  onProvider: readonly ClassifiedModel[],
+  picked: ClassifiedModel,
+  pinned: ClassifiedModel,
+  judgment: RouteJudgment,
+  demand: number,
+  stepped: ModelTier,
+): RouteDecision {
+  if (tierRank(stepped) > tierRank(pinned.tier)) {
     const bestHere = strongest(onProvider);
     if (bestHere && tierRank(bestHere.tier) > tierRank(pinned.tier)) {
       return toDecision(bestHere, judgment, demand, false, false);
@@ -195,7 +300,8 @@ export async function judgeRoutePrompt(
           instructions:
             "Which kind of work does the next step need? Earlier lines are the recent task. If the newest line only says to continue, judge that task.",
           criteria: {
-            quick: "A short edit, lookup, or question a flash model finishes in one pass.",
+            quick:
+              "A local text edit or a factual question. Not an existing system, a previous session, or a running service.",
             coding: "Ordinary implementation, refactoring, or debugging.",
             cyber_light:
               "Security explanation, review, or a small fix that does not need a cybersecurity specialist.",
@@ -217,6 +323,16 @@ export async function judgeRoutePrompt(
           type: "noul",
           instructions:
             "Do the intermediate steps matter, from 0 for recall to 1 for deep reasoning?",
+        },
+        stakes: {
+          type: "noul",
+          instructions:
+            "How costly is a wrong next step, from 0 for a local read to 1 for starting, stopping, migrating, or discarding a running system?",
+        },
+        correction: {
+          type: "noul",
+          instructions:
+            "Is the newest line a correction of the previous approach, from 0 for a new request to 1 for rejecting what just happened?",
         },
       },
     }),
@@ -244,6 +360,8 @@ function judgmentFromAnswers(answers: JevAnswers): RouteJudgment | null {
     complexity: readUnit(answers, "complexity"),
     capability: readUnit(answers, "capability"),
     deepReasoning: readUnit(answers, "deep_reasoning"),
+    stakes: readOptionalUnit(answers, "stakes"),
+    correction: readOptionalUnit(answers, "correction"),
   };
 }
 
@@ -252,6 +370,14 @@ function readUnit(answers: JevAnswers, name: string): number {
     return clamp01(noulAnswer(answers, name));
   } catch {
     return 0.5;
+  }
+}
+
+function readOptionalUnit(answers: JevAnswers, name: string): number {
+  try {
+    return clamp01(noulAnswer(answers, name));
+  } catch {
+    return 0;
   }
 }
 
@@ -292,6 +418,24 @@ function fallbackTiers(tier: ModelTier): ModelTier[] {
   if (tier === "flash") return ["standard", "strong"];
   if (tier === "strong") return ["standard", "flash"];
   return ["strong", "flash"];
+}
+
+function applyReasoningEffort(
+  tier: ModelTier,
+  kind: RouteKind,
+  effort: JevReasoningEffort,
+): ModelTier {
+  if (kind === "cyber_heavy" || effort === "auto") return tier;
+  if (effort === "low") return "flash";
+  if (effort === "medium") return tier === "flash" ? "standard" : tier;
+  return "strong";
+}
+
+function stepTier(target: ModelTier, pinned: ModelTier, allowStepDown: boolean): ModelTier {
+  if (tierRank(target) >= tierRank(pinned)) return target;
+  if (!allowStepDown) return pinned;
+  if (pinned === "strong" && target === "flash") return "standard";
+  return target;
 }
 
 function tierRank(tier: ModelTier): number {
