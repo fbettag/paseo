@@ -143,10 +143,12 @@ export class JevAgentClient {
     if (!routed) {
       throw new Error("Jev session is missing its routed provider");
     }
+    const cwd = overrides?.cwd ?? readCwd(routed.handle.metadata);
+    const providerModes = await readProviderModes(this.logger, ports, cwd);
     const inner = await ports.resumeSession(
       routed.providerId,
-      routed.handle,
-      overrides,
+      providerHandleForResume(routed),
+      innerResumeOverrides(overrides, cwd, providerModes[routed.providerId] ?? []),
       launchContext,
       options,
     );
@@ -156,10 +158,11 @@ export class JevAgentClient {
       {
         ...overrides,
         provider: JEV_PROVIDER_ID,
-        cwd: overrides?.cwd ?? readCwd(routed.handle.metadata),
+        cwd,
       },
       launchContext,
     );
+    session.useProviderModes(providerModes);
     session.adopt(inner, routed.decision);
     return session;
   }
@@ -199,6 +202,10 @@ class JevAgentSession implements AgentSession {
 
   adopt(inner: AgentSession, decision: RouteDecision): void {
     this.bind(inner, decision, false);
+  }
+
+  useProviderModes(modes: Readonly<Record<string, { id: string }[]>>): void {
+    this.providerModes = modes;
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {
@@ -268,6 +275,7 @@ class JevAgentSession implements AgentSession {
       throw new Error(`Unknown Jev mode '${modeId}'`);
     }
     this.permissionMode = modeId;
+    await this.ensureProviderModes();
     const inner = this.inner;
     const providerId = this.decision?.providerId;
     if (!inner?.setMode || !providerId) return;
@@ -401,6 +409,13 @@ class JevAgentSession implements AgentSession {
     return mapJevPermissionMode(this.permissionMode, this.providerModes[providerId] ?? []);
   }
 
+  private async ensureProviderModes(): Promise<void> {
+    if (Object.keys(this.providerModes).length > 0) return;
+    const ports = this.ports;
+    if (!ports) return;
+    this.providerModes = await readProviderModes(this.logger, ports, this.config.cwd);
+  }
+
   private async readBlockedProviders(ports: JevRouterPorts): Promise<ReadonlySet<string>> {
     try {
       return await ports.blockedProviders();
@@ -513,6 +528,80 @@ function retag(event: AgentStreamEvent): AgentStreamEvent | null {
     };
   }
   return { ...event, provider: JEV_PROVIDER_ID };
+}
+
+async function readProviderModes(
+  logger: Logger,
+  ports: JevRouterPorts,
+  cwd: string,
+): Promise<Readonly<Record<string, { id: string }[]>>> {
+  if (!ports.listProviderModes) return {};
+  try {
+    return await ports.listProviderModes(cwd);
+  } catch (error) {
+    logger.warn({ err: error }, "Jev could not read provider modes");
+    return {};
+  }
+}
+
+function innerResumeOverrides(
+  overrides: Partial<AgentSessionConfig> | undefined,
+  cwd: string,
+  providerModes: readonly { id: string }[],
+): Partial<AgentSessionConfig> {
+  const requested = isJevPermissionMode(overrides?.modeId) ? overrides.modeId : undefined;
+  const mapped = requested ? mapJevPermissionMode(requested, providerModes) : undefined;
+  if (!mapped) return { cwd };
+  return { cwd, modeId: mapped };
+}
+
+function providerHandleForResume(routed: {
+  handle: AgentPersistenceHandle;
+  decision: RouteDecision;
+}): AgentPersistenceHandle {
+  const unwrapped = unwrapSameSession(routed.handle);
+  const metadata = metadataWithoutInner(unwrapped.metadata);
+  const model = metadata.model;
+  if (typeof model !== "string" || model.length === 0 || model === "auto") {
+    metadata.model = routed.decision.modelId;
+  }
+  return {
+    provider: unwrapped.provider,
+    sessionId: unwrapped.sessionId,
+    nativeHandle: unwrapped.nativeHandle,
+    metadata,
+  };
+}
+
+function unwrapSameSession(handle: AgentPersistenceHandle): AgentPersistenceHandle {
+  let current = handle;
+  for (let depth = 0; depth < 8; depth += 1) {
+    const nested = readNestedHandle(current);
+    if (!nested) break;
+    if (nested.provider !== current.provider || nested.sessionId !== current.sessionId) break;
+    current = nested;
+  }
+  return current;
+}
+
+function readNestedHandle(handle: AgentPersistenceHandle): AgentPersistenceHandle | null {
+  const nested = handle.metadata?.inner;
+  if (!nested || typeof nested !== "object") return null;
+  const record = nested as Partial<AgentPersistenceHandle>;
+  if (typeof record.provider !== "string" || typeof record.sessionId !== "string") return null;
+  return {
+    provider: record.provider,
+    sessionId: record.sessionId,
+    nativeHandle: typeof record.nativeHandle === "string" ? record.nativeHandle : undefined,
+    metadata: record.metadata,
+  };
+}
+
+function metadataWithoutInner(metadata: AgentMetadata | undefined): AgentMetadata {
+  if (!metadata) return {};
+  const next: AgentMetadata = { ...metadata };
+  delete next.inner;
+  return next;
 }
 
 function readRoutedHandle(metadata: AgentMetadata | undefined): {

@@ -74,3 +74,29 @@ export function claudeConfigDir(env: NodeJS.ProcessEnv): string {
 function resolveConfigDir(options?: ClaudeProjectDirOptions): string {
   return options?.configDir ?? claudeConfigDir(process.env);
 }
+
+// The Claude child writes transcripts under the provider's CLAUDE_CONFIG_DIR.
+// That value lives on the provider settings, not on the daemon process, so
+// history replay has to use the same directory the child used.
+export function resolveClaudeHistoryConfigDir(input?: {
+  launchEnv?: Record<string, string | undefined>;
+  providerEnv?: Record<string, string | undefined>;
+  processEnv?: Record<string, string | undefined>;
+}): string {
+  const launchDir = configuredDir(input?.launchEnv?.CLAUDE_CONFIG_DIR);
+  if (launchDir) return launchDir;
+  const providerDir = configuredDir(input?.providerEnv?.CLAUDE_CONFIG_DIR);
+  if (providerDir) return providerDir;
+  const processDir = configuredDir(
+    input?.processEnv?.CLAUDE_CONFIG_DIR ?? process.env.CLAUDE_CONFIG_DIR,
+  );
+  if (processDir) return processDir;
+  return join(homedir(), ".claude");
+}
+
+function configuredDir(value: string | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  return trimmed;
+}
