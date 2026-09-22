@@ -229,6 +229,34 @@ describe("routeModels", () => {
     expect(decision).toBeNull();
   });
 
+  it("keeps the standard model when a correction only looks quick", () => {
+    const decision = routeModels(
+      CATALOG,
+      { ...QUICK, stakes: 0.8, correction: 0.9 },
+      {
+        pin: {
+          providerId: "qwen",
+          modelId: "qwen3.7-plus",
+          tier: "standard",
+          specialty: "general",
+          demand: 0.5,
+        },
+      },
+    );
+    expect(decision?.modelId).not.toBe("qwen3.6-flash");
+    expect(decision?.tier).toBe("strong");
+  });
+
+  it("lifts a quick task to standard when reasoning effort is medium", () => {
+    const decision = routeModels(CATALOG, QUICK, { reasoningEffort: "medium" });
+    expect(decision?.tier).not.toBe("flash");
+  });
+
+  it("starts on a strong model when reasoning effort is high", () => {
+    const decision = routeModels(CATALOG, QUICK, { reasoningEffort: "high" });
+    expect(decision).toMatchObject({ tier: "strong", modelId: "claude-opus-5" });
+  });
+
   it("treats continue as the earlier task, not as a new quick prompt", () => {
     const earlier =
       "redesign the authentication layer and the threat model for every service in this repository";
