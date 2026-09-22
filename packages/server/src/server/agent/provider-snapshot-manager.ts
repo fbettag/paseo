@@ -133,6 +133,7 @@ export interface ProviderSnapshotManagerOptions {
   diagnosticTimeoutMs?: number;
   openCodeBridge?: OpenCodeBridge;
   routeJudge?: (prompt: string) => Promise<RouteJudgment | null>;
+  continuationJudge?: (question: string, goal: string) => Promise<boolean | null>;
 }
 
 interface ProviderSnapshotRefreshOptions {
@@ -261,6 +262,7 @@ export class ProviderSnapshotManager {
   private readonly isDev: boolean;
   private readonly extraClients: Partial<Record<AgentProvider, AgentClient>>;
   private readonly routeJudge?: (prompt: string) => Promise<RouteJudgment | null>;
+  private readonly continuationJudge?: (question: string, goal: string) => Promise<boolean | null>;
   private readonly jevPorts: JevRouterPorts;
   private jevUsageLookup: (() => Promise<readonly ProviderUsage[]>) | null = null;
   private runtimeSettings: AgentProviderRuntimeSettingsMap | undefined;
@@ -290,6 +292,7 @@ export class ProviderSnapshotManager {
       this.refreshTimeoutMs,
     );
     this.routeJudge = options.routeJudge;
+    this.continuationJudge = options.continuationJudge;
     this.jevPorts = {
       listCandidates: (cwd) => this.listJevCandidates(cwd),
       openSession: (providerId, config, launchContext, sessionOptions) =>
@@ -297,6 +300,7 @@ export class ProviderSnapshotManager {
       resumeSession: (providerId, handle, overrides, launchContext, sessionOptions) =>
         this.resumeJevSession(providerId, handle, overrides, launchContext, sessionOptions),
       judge: (prompt) => this.judgeJevRoute(prompt),
+      judgeContinue: (question, goal) => this.judgeJevContinue(question, goal),
       blockedProviders: () => this.blockedJevProviders(),
       listProviderModes: (cwd) => this.listJevProviderModes(cwd),
     };
@@ -552,6 +556,16 @@ export class ProviderSnapshotManager {
     } catch (error) {
       this.logger.warn({ err: error }, "Jev usage lookup failed");
       return new Set();
+    }
+  }
+
+  private async judgeJevContinue(question: string, goal: string): Promise<boolean | null> {
+    if (!this.continuationJudge) return null;
+    try {
+      return await this.continuationJudge(question, goal);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Jev continuation judgment failed");
+      return null;
     }
   }
 

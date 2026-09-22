@@ -188,7 +188,7 @@ import type {
 import { loadPersistedConfig, type PersistedConfig } from "./persisted-config.js";
 import { resolveJevConfig } from "./jev/defaults.js";
 import { DaemonConfigJevPolicy } from "./jev/policy.js";
-import { judgeRoutePrompt } from "./jev/model-router.js";
+import { judgeRoutePrompt, judgeShouldContinue } from "./jev/model-router.js";
 import { createServiceProxySubsystem, type ServiceProxySubsystem } from "./service-proxy.js";
 import { releaseWorkspaceServicePortPlan } from "./workspace-service-port-registry.js";
 import { ScriptHealthMonitor } from "./script-health-monitor.js";
@@ -919,6 +919,11 @@ export async function createPaseoDaemon(
         const client = jevPolicy.createClient();
         if (!client) return null;
         return judgeRoutePrompt(client, prompt);
+      },
+      continuationJudge: async (question, goal) => {
+        const client = jevPolicy.createClient();
+        if (!client) return null;
+        return judgeShouldContinue(client, question, goal);
       },
     },
   });

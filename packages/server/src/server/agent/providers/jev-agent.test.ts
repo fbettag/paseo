@@ -85,6 +85,16 @@ class FakeSession implements AgentSession {
   async setModel(modelId: string | null): Promise<void> {
     if (modelId) this.switched.push(modelId);
   }
+
+  async listCommands() {
+    return [{ name: "goal", description: "Set the goal", argumentHint: "<objective>" }];
+  }
+
+  tryHandleOutOfBand(prompt: AgentPromptInput) {
+    return typeof prompt === "string" && prompt.startsWith("/goal")
+      ? { run: async () => undefined }
+      : null;
+  }
 }
 
 const MODELS: EnabledModel[] = [
@@ -235,6 +245,43 @@ describe("JevAgentClient", () => {
     expect(harness.sessions[1]?.prompts).toEqual(["continue the exploit trace"]);
   });
 
+  it("keeps the opened model so the provider cache stays warm", async () => {
+    let calls = 0;
+    const harness = ports(async () => {
+      calls += 1;
+      return calls === 1
+        ? { kind: "coding", complexity: 0.8, capability: 0.8, deepReasoning: 0.4 }
+        : { kind: "quick", complexity: 0.1, capability: 0.1, deepReasoning: 0.1 };
+    });
+    const client = new JevAgentClient(createTestLogger(), harness.ports);
+    const session = await client.createSession({ provider: "jev", cwd: "/tmp/repo" });
+    await session.startTurn("build the collector and keep it running");
+    const opened = harness.opened[0]?.model;
+    await session.startTurn("continue");
+    expect(harness.opened).toHaveLength(1);
+    expect(harness.sessions[0]?.switched).toEqual([]);
+    expect(harness.opened[0]?.model).toBe(opened);
+    expect(calls).toBe(1);
+  });
+
+  it("lists and runs the inner harness commands", async () => {
+    const harness = ports(async () => ({
+      kind: "coding",
+      complexity: 0.6,
+      capability: 0.6,
+      deepReasoning: 0.2,
+    }));
+    const client = new JevAgentClient(createTestLogger(), harness.ports);
+    const session = await client.createSession({ provider: "jev", cwd: "/tmp/repo" });
+    await session.startTurn("build the collector");
+    await expect(session.listCommands?.()).resolves.toEqual([
+      { name: "goal", description: "Set the goal", argumentHint: "<objective>" },
+    ]);
+    expect(session.tryHandleOutOfBand?.("/goal ship the collector")).toEqual({
+      run: expect.any(Function),
+    });
+  });
+
   it("judges continue against the earlier task", async () => {
     const seen: string[] = [];
     const harness = ports(async (prompt) => {
@@ -245,8 +292,8 @@ describe("JevAgentClient", () => {
     const session = await client.createSession({ provider: "jev", cwd: "/tmp/repo" });
     await session.startTurn("redesign the authentication threat model across the services");
     await session.startTurn("continue");
-    expect(seen[1]).toContain("authentication");
-    expect(seen[1]).not.toBe("continue");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("authentication");
   });
 
   it("resumes Claude with the routed model", async () => {
