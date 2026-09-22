@@ -144,11 +144,33 @@ const OPENCODE_MODES: AgentProviderModeDefinition[] = [
 
 const JEV_MODES: AgentProviderModeDefinition[] = [
   {
+    id: "ask",
+    label: "Always Ask",
+    description: "The chosen provider asks before tools run.",
+    icon: "Shield",
+    colorTier: "safe",
+  },
+  {
     id: "auto",
     label: "Auto",
-    description: "Jev chooses an enabled model for the task",
-    icon: "Sparkles",
+    description: "Jev chooses the model. The provider reviews ordinary permission prompts.",
+    icon: "ShieldCheck",
     colorTier: "moderate",
+  },
+  {
+    id: "acceptEdits",
+    label: "Accept File Edits",
+    description: "File edits run without a prompt. Other tools still follow the provider.",
+    icon: "ShieldPlus",
+    colorTier: "moderate",
+  },
+  {
+    id: "bypass",
+    label: "Bypass",
+    description: "Skip permission prompts on the chosen provider.",
+    icon: "ShieldOff",
+    colorTier: "dangerous",
+    isUnattended: true,
   },
 ];
 

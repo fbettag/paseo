@@ -5,8 +5,11 @@ import type { BrowserToolsResponsePayload } from "./errors.js";
 import type {
   PaseoToolConfig,
   PaseoToolExecutionContext,
+  PaseoToolJevAdmission,
   PaseoToolResult,
 } from "../agent/tools/types.js";
+import { decideComputerUse, runComputerUse } from "../jev/computer-use.js";
+import type { BrowserToolsResponsePayload as BrowserPayload } from "./errors.js";
 
 interface CallerAgentContext {
   id: string;
@@ -27,6 +30,7 @@ export interface RegisterBrowserToolsOptions {
   broker: Pick<BrowserToolsBroker, "execute">;
   callerAgentId?: string;
   resolveCallerAgent: () => CallerAgentContext | null;
+  jevPolicy?: Pick<PaseoToolJevAdmission, "createClient">;
 }
 
 const HTTP_URL_ONLY_MESSAGE = "URL must use http/https only";
@@ -703,6 +707,110 @@ export function registerBrowserTools(options: RegisterBrowserToolsOptions): void
       return browserToolResult({ payload, context: { ...context, browserId } });
     },
   );
+
+  if (options.jevPolicy) {
+    registerJevBrowserRun(options);
+  }
+}
+
+function registerJevBrowserRun(options: RegisterBrowserToolsOptions): void {
+  const jevPolicy = options.jevPolicy;
+  if (!jevPolicy) return;
+  options.registerTool(
+    "browser_run",
+    {
+      title: "Run browser goal with Jev",
+      description:
+        "Drive one Paseo browser tab toward a goal. Each step reads the accessibility snapshot and asks Jev which offered element to use. Pass text when a field must be filled. Jev does not look at screenshots and does not invent text.",
+      inputSchema: {
+        goal: z.string().trim().min(1).max(2_000),
+        browserId: BrowserAutomationBrowserIdSchema,
+        text: z.string().max(4_000).optional(),
+        maxSteps: z.number().int().min(1).max(16).optional(),
+      },
+    },
+    async ({ goal, browserId, text, maxSteps }) => {
+      const context = resolveBrowserToolContext(options);
+      const client = jevPolicy.createClient();
+      if (!client) {
+        return {
+          content: [{ type: "text", text: "Jev is not configured, so browser_run did not start." }],
+        };
+      }
+      const result = await runComputerUse({
+        goal,
+        text,
+        maxSteps: maxSteps ?? 8,
+        decide: (step) => decideComputerUse(client, step),
+        page: {
+          snapshot: () => browserSnapshot(options, context, browserId),
+          click: (ref) =>
+            browserCommand(options, context, {
+              command: "click",
+              args: { browserId, ref, button: "left", doubleClick: false, modifiers: [] },
+            }),
+          fill: (ref, value) =>
+            browserCommand(options, context, { command: "fill", args: { browserId, ref, value } }),
+          typeText: (ref, value) =>
+            browserCommand(options, context, {
+              command: "type",
+              args: { browserId, ref, text: value },
+            }),
+          scroll: (deltaY) =>
+            browserCommand(options, context, {
+              command: "scroll",
+              args: { browserId, deltaX: 0, deltaY },
+            }),
+          pressEnter: () =>
+            browserCommand(options, context, {
+              command: "keypress",
+              args: { browserId, key: "Enter" },
+            }),
+        },
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text: `browser_run ${result.status}: ${result.steps.join(", ") || "no steps"}`,
+          },
+        ],
+      };
+    },
+  );
+}
+
+async function browserSnapshot(
+  options: RegisterBrowserToolsOptions,
+  context: { agentId?: string; cwd?: string; workspaceId?: string },
+  browserId: string,
+): Promise<string> {
+  const payload = await options.broker.execute({
+    agentId: context.agentId,
+    cwd: context.cwd,
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+    command: { command: "snapshot", args: { browserId } },
+  });
+  if (!payload.ok || payload.result.command !== "snapshot") {
+    throw new Error("Browser snapshot failed");
+  }
+  return payload.result.snapshot;
+}
+
+async function browserCommand(
+  options: RegisterBrowserToolsOptions,
+  context: { agentId?: string; cwd?: string; workspaceId?: string },
+  command: Parameters<BrowserToolsBroker["execute"]>[0]["command"],
+): Promise<void> {
+  const payload: BrowserPayload = await options.broker.execute({
+    agentId: context.agentId,
+    cwd: context.cwd,
+    ...(context.workspaceId ? { workspaceId: context.workspaceId } : {}),
+    command,
+  });
+  if (!payload.ok) {
+    throw new Error(`Browser ${command.command} failed`);
+  }
 }
 
 function resolveBrowserToolContext(options: RegisterBrowserToolsOptions): {

@@ -36,6 +36,12 @@ import {
   type RouteJudgment,
   type RouteKind,
 } from "../../jev/model-router.js";
+import {
+  isJevPermissionMode,
+  JEV_PERMISSION_MODES,
+  mapJevPermissionMode,
+  type JevPermissionMode,
+} from "../../jev/permission-mode.js";
 
 export const JEV_PROVIDER_ID = "jev";
 
@@ -62,11 +68,11 @@ const JEV_MODEL: AgentModelDefinition = {
   isDefault: true,
 };
 
-const JEV_MODE: AgentMode = {
-  id: "auto",
-  label: "Auto",
-  description: "Jev chooses an enabled model",
-};
+const JEV_MODES: AgentMode[] = JEV_PERMISSION_MODES.map((mode) => ({
+  id: mode.id,
+  label: mode.label,
+  description: mode.description,
+}));
 
 export interface JevRouterPorts {
   listCandidates(cwd?: string): Promise<EnabledModel[]>;
@@ -85,6 +91,7 @@ export interface JevRouterPorts {
   ): Promise<AgentSession>;
   judge(prompt: string): Promise<RouteJudgment | null>;
   blockedProviders(): Promise<ReadonlySet<string>>;
+  listProviderModes?(cwd?: string): Promise<Readonly<Record<string, { id: string }[]>>>;
 }
 
 export class JevAgentClient {
@@ -106,8 +113,8 @@ export class JevAgentClient {
   ): Promise<ProviderCatalog> {
     return {
       models: [JEV_MODEL],
-      modes: [JEV_MODE],
-      defaultModeId: JEV_MODE.id,
+      modes: JEV_MODES,
+      defaultModeId: "auto",
     };
   }
 
@@ -170,6 +177,8 @@ class JevAgentSession implements AgentSession {
   readonly capabilities = CAPABILITIES;
   private inner: AgentSession | null = null;
   private decision: RouteDecision | null = null;
+  private permissionMode: JevPermissionMode;
+  private providerModes: Readonly<Record<string, { id: string }[]>> = {};
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -180,7 +189,9 @@ class JevAgentSession implements AgentSession {
     private readonly config: AgentSessionConfig,
     private readonly launchContext?: AgentLaunchContext,
     private readonly createOptions?: AgentCreateSessionOptions,
-  ) {}
+  ) {
+    this.permissionMode = isJevPermissionMode(config.modeId) ? config.modeId : "auto";
+  }
 
   get id(): string | null {
     return this.inner?.id ?? null;
@@ -232,7 +243,7 @@ class JevAgentSession implements AgentSession {
       provider: JEV_PROVIDER_ID,
       sessionId: inner?.sessionId ?? null,
       model: "auto",
-      modeId: JEV_MODE.id,
+      modeId: this.permissionMode,
       extra: this.decision
         ? {
             routedProvider: this.decision.providerId,
@@ -245,14 +256,24 @@ class JevAgentSession implements AgentSession {
   }
 
   async getAvailableModes(): Promise<AgentMode[]> {
-    return [JEV_MODE];
+    return JEV_MODES;
   }
 
   async getCurrentMode(): Promise<string | null> {
-    return JEV_MODE.id;
+    return this.permissionMode;
   }
 
-  async setMode(_modeId: string): Promise<void> {}
+  async setMode(modeId: string): Promise<void> {
+    if (!isJevPermissionMode(modeId)) {
+      throw new Error(`Unknown Jev mode '${modeId}'`);
+    }
+    this.permissionMode = modeId;
+    const inner = this.inner;
+    const providerId = this.decision?.providerId;
+    if (!inner?.setMode || !providerId) return;
+    const mapped = mapJevPermissionMode(modeId, this.providerModes[providerId] ?? []);
+    if (mapped) await inner.setMode(mapped);
+  }
 
   getPendingPermissions(): AgentPermissionRequest[] {
     return this.inner?.getPendingPermissions() ?? [];
@@ -325,6 +346,7 @@ class JevAgentSession implements AgentSession {
       throw new Error("Jev routing is not connected to the daemon");
     }
     const candidates = (await ports.listCandidates(this.config.cwd)).map(classifyEnabledModel);
+    this.providerModes = (await ports.listProviderModes?.(this.config.cwd)) ?? this.providerModes;
     const blocked = await this.readBlockedProviders(ports);
     let judgment: RouteJudgment | null = null;
     try {
@@ -375,6 +397,10 @@ class JevAgentSession implements AgentSession {
     return this.inner;
   }
 
+  private mappedMode(providerId: string): string | undefined {
+    return mapJevPermissionMode(this.permissionMode, this.providerModes[providerId] ?? []);
+  }
+
   private async readBlockedProviders(ports: JevRouterPorts): Promise<ReadonlySet<string>> {
     try {
       return await ports.blockedProviders();
@@ -391,7 +417,7 @@ class JevAgentSession implements AgentSession {
     const previous = this.inner;
     const inner = await ports.openSession(
       decision.providerId,
-      delegatedConfig(this.config, decision),
+      delegatedConfig(this.config, decision, this.mappedMode(decision.providerId)),
       this.launchContext,
       this.createOptions,
     );
@@ -453,12 +479,16 @@ class JevAgentSession implements AgentSession {
   }
 }
 
-function delegatedConfig(config: AgentSessionConfig, decision: RouteDecision): AgentSessionConfig {
+function delegatedConfig(
+  config: AgentSessionConfig,
+  decision: RouteDecision,
+  modeId: string | undefined,
+): AgentSessionConfig {
   return {
     ...config,
     provider: decision.providerId,
     model: decision.modelId,
-    modeId: undefined,
+    modeId,
     thinkingOptionId: undefined,
     featureValues: undefined,
   };
