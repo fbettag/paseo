@@ -91,6 +91,29 @@ export function demandOf(judgment: RouteJudgment): number {
   return clamp01(base);
 }
 
+const CONTINUATION_CUE =
+  /^(?:please\s+)?(?:continue|weiter|mach weiter|und weiter|go on|keep going|proceed)\b[.!?]*$/i;
+
+export function isContinuationCue(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length > 48) return false;
+  return CONTINUATION_CUE.test(trimmed);
+}
+
+// The newest line alone is the wrong task when the user says "continue".
+// Earlier user lines are the work that step still belongs to.
+export function routeTaskText(latest: string, recent: readonly string[]): string {
+  const prior = recent
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .slice(-6);
+  if (prior.length === 0) return latest;
+  const body = isContinuationCue(latest)
+    ? prior.join("\n\n")
+    : `${prior.slice(-3).join("\n\n")}\n\n${latest}`;
+  return body.slice(0, 4_000);
+}
+
 export function heuristicRouteJudgment(prompt: string): RouteJudgment {
   const text = prompt.trim();
   if (HEAVY_CYBER.test(text)) {
@@ -126,19 +149,29 @@ export function routeModels(
     return toDecision(picked, judgment, demand, false, picked.providerId !== pin.providerId);
   }
 
-  const sameProvider = pool.filter((model) => model.providerId === pinned.providerId);
-  const narrowed = sameProvider.length > 0 ? modelsAtTier(sameProvider, tier) : [pinned];
-  const next = pickOne(narrowed);
-  if (next.providerId !== pinned.providerId) {
-    return toDecision(pinned, judgment, pin.demand, true, false);
+  const onProvider = pool.filter((model) => model.providerId === pinned.providerId);
+  const atTier = modelsAtExactTier(onProvider, tier);
+  if (atTier.length > 0) {
+    const next = pickOne(atTier);
+    if (next.modelId === pinned.modelId) {
+      return toDecision(pinned, judgment, demand, true, false);
+    }
+    if (pinned.tier === tier && Math.abs(demand - pin.demand) < ROUTE_DEMAND_DEADBAND) {
+      return toDecision(pinned, judgment, demand, true, false);
+    }
+    return toDecision(next, judgment, demand, false, false);
   }
-  if (next.modelId === pinned.modelId) {
-    return toDecision(pinned, judgment, demand, true, false);
+
+  if (tierRank(tier) > tierRank(pinned.tier)) {
+    const bestHere = strongest(onProvider);
+    if (bestHere && tierRank(bestHere.tier) > tierRank(pinned.tier)) {
+      return toDecision(bestHere, judgment, demand, false, false);
+    }
+    if (tierRank(picked.tier) > tierRank(pinned.tier)) {
+      return toDecision(picked, judgment, demand, false, false);
+    }
   }
-  if (Math.abs(demand - pin.demand) < ROUTE_DEMAND_DEADBAND && pinned.tier === tier) {
-    return toDecision(pinned, judgment, demand, true, false);
-  }
-  return toDecision(next, judgment, demand, false, false);
+  return toDecision(pinned, judgment, demand, true, false);
 }
 
 function modelsAcceptingWork(
@@ -159,7 +192,8 @@ export async function judgeRoutePrompt(
       questions: {
         task_kind: {
           type: "choice",
-          instructions: "Which kind of work is this task?",
+          instructions:
+            "Which kind of work does the next step need? Earlier lines are the recent task. If the newest line only says to continue, judge that task.",
           criteria: {
             quick: "A short edit, lookup, or question a flash model finishes in one pass.",
             coding: "Ordinary implementation, refactoring, or debugging.",
@@ -258,6 +292,26 @@ function fallbackTiers(tier: ModelTier): ModelTier[] {
   if (tier === "flash") return ["standard", "strong"];
   if (tier === "strong") return ["standard", "flash"];
   return ["strong", "flash"];
+}
+
+function tierRank(tier: ModelTier): number {
+  if (tier === "flash") return 0;
+  if (tier === "standard") return 1;
+  return 2;
+}
+
+function modelsAtExactTier(models: readonly ClassifiedModel[], tier: ModelTier): ClassifiedModel[] {
+  return models.filter((model) => model.tier === tier);
+}
+
+function strongest(models: readonly ClassifiedModel[]): ClassifiedModel | null {
+  const strong = modelsAtExactTier(models, "strong");
+  if (strong.length > 0) return pickOne(strong);
+  const standard = modelsAtExactTier(models, "standard");
+  if (standard.length > 0) return pickOne(standard);
+  const flash = modelsAtExactTier(models, "flash");
+  if (flash.length > 0) return pickOne(flash);
+  return null;
 }
 
 function modelsAtTier(models: readonly ClassifiedModel[], tier: ModelTier): ClassifiedModel[] {
