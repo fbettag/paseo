@@ -341,6 +341,63 @@ export async function judgeRoutePrompt(
   return judgmentFromAnswers(answers);
 }
 
+const NEXT_STEP_QUESTION =
+  /soll ich|willst du|welcher weg|bereit zu|oder sollen|nächster schritt|naechster schritt/i;
+const BLOCKING_STEP =
+  /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy/i;
+
+export function looksLikeNextStepQuestion(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed.endsWith("?")) return false;
+  return NEXT_STEP_QUESTION.test(trimmed);
+}
+
+// A covered next step can continue. Anything destructive, or anything the goal
+// does not already authorize, still waits for the user.
+export function heuristicShouldContinue(question: string, goal: string): boolean {
+  if (!looksLikeNextStepQuestion(question)) return false;
+  if (BLOCKING_STEP.test(question)) return false;
+  return goal.trim().length > 0;
+}
+
+export async function judgeShouldContinue(
+  client: JevClient,
+  question: string,
+  goal: string,
+): Promise<boolean | null> {
+  const answers = await withTimeout(
+    client.ask({
+      state: {
+        question: question.slice(0, 1_500),
+        goal: goal.slice(0, 2_000),
+      },
+      questions: {
+        covered: {
+          type: "noul",
+          instructions:
+            "Is this next step already authorized by the open goal, with no secret, no other project, and no destructive action? 0 means ask the user. 1 means continue.",
+        },
+      },
+    }),
+    ROUTE_JUDGMENT_TIMEOUT_MS,
+  );
+  try {
+    return noulAnswer(answers, "covered") >= 0.7;
+  } catch {
+    return null;
+  }
+}
+
+export function meetsReasoningFloor(tier: ModelTier, effort: JevReasoningEffort): boolean {
+  return tierRank(tier) >= tierRank(reasoningFloor(effort));
+}
+
+function reasoningFloor(effort: JevReasoningEffort): ModelTier {
+  if (effort === "medium") return "standard";
+  if (effort === "high") return "strong";
+  return "flash";
+}
+
 export function pinFromDecision(decision: RouteDecision): RoutePin {
   return {
     providerId: decision.providerId,

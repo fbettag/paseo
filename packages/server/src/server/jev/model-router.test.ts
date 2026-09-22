@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyEnabledModel,
   heuristicRouteJudgment,
+  heuristicShouldContinue,
   isContinuationCue,
   routeModels,
   routeTaskText,
@@ -255,6 +256,13 @@ describe("routeModels", () => {
   it("starts on a strong model when reasoning effort is high", () => {
     const decision = routeModels(CATALOG, QUICK, { reasoningEffort: "high" });
     expect(decision).toMatchObject({ tier: "strong", modelId: "claude-opus-5" });
+  });
+
+  it("continues a covered next step and stops for a destructive one", () => {
+    const goal = "bring the collector up locally and score shops";
+    expect(heuristicShouldContinue("Soll ich den Bug jetzt fixen?", goal)).toBe(true);
+    expect(heuristicShouldContinue("Soll ich mit dem Backup-Restore anfangen?", goal)).toBe(false);
+    expect(heuristicShouldContinue("Der Collector läuft.", goal)).toBe(false);
   });
 
   it("treats continue as the earlier task, not as a new quick prompt", () => {
