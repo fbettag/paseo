@@ -298,6 +298,7 @@ export class ProviderSnapshotManager {
         this.resumeJevSession(providerId, handle, overrides, launchContext, sessionOptions),
       judge: (prompt) => this.judgeJevRoute(prompt),
       blockedProviders: () => this.blockedJevProviders(),
+      listProviderModes: (cwd) => this.listJevProviderModes(cwd),
     };
     this.generation = this.createGeneration(
       this.buildRegistry(this.runtimeSettings, this.providerOverrides),
@@ -524,6 +525,18 @@ export class ProviderSnapshotManager {
 
   setJevUsageLookup(lookup: (() => Promise<readonly ProviderUsage[]>) | null): void {
     this.jevUsageLookup = lookup;
+  }
+
+  private async listJevProviderModes(
+    cwd?: string,
+  ): Promise<Readonly<Record<string, { id: string }[]>>> {
+    const entries = await this.listProviders({ cwd, wait: false });
+    const modes: Record<string, { id: string }[]> = {};
+    for (const entry of entries) {
+      if (entry.provider === JEV_PROVIDER_ID || !entry.enabled) continue;
+      modes[entry.provider] = (entry.modes ?? []).map((mode) => ({ id: mode.id }));
+    }
+    return modes;
   }
 
   private async blockedJevProviders(): Promise<ReadonlySet<string>> {

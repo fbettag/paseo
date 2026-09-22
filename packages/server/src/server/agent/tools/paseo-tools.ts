@@ -1245,6 +1245,7 @@ export function createPaseoToolCatalog(options: PaseoToolHostDependencies): Pase
       broker: options.browserToolsBroker,
       callerAgentId,
       resolveCallerAgent,
+      jevPolicy: options.jevPolicy,
     });
   }
 
