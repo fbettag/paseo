@@ -88,6 +88,8 @@ import {
   type WebSocketRuntimeCounters,
   type WebSocketRuntimeDiagnosticSnapshot,
 } from "./websocket/runtime-metrics.js";
+import { extraCodexUsageFetchers } from "../services/quota-fetcher/codex-accounts.js";
+import { createProviderUsageFetchers } from "../services/quota-fetcher/manifest.js";
 import { ProviderUsageService } from "../services/quota-fetcher/service.js";
 import { getProcessMemoryDiagnostics, getProcessUptimeSeconds } from "./process-diagnostics.js";
 import {
@@ -749,7 +751,14 @@ export class VoiceAssistantWebSocketServer {
 
     this.providerUsageService = new ProviderUsageService({
       logger: this.logger,
+      fetchers: [
+        ...createProviderUsageFetchers({ logger: this.logger }),
+        ...extraCodexUsageFetchers(this.daemonConfigStore.get().providers, { logger: this.logger }),
+      ],
     });
+    this.providerSnapshotManager.setJevUsageLookup(() =>
+      this.providerUsageService.listUsage().then((result) => result.providers),
+    );
 
     this.wss = this.createWebSocketServer(server, wsConfig, auth);
     this.startRuntimeMetricsInterval();

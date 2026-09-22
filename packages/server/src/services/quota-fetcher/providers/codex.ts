@@ -64,6 +64,8 @@ interface CodexQuotaProviderOptions {
   logger: Logger;
   codexHome?: string;
   fetch?: ProviderApiFetch;
+  providerId?: string;
+  displayName?: string;
 }
 
 function codexWindow(
@@ -77,13 +79,17 @@ function codexWindow(
 }
 
 export class CodexQuotaProvider implements ProviderUsageFetcher {
-  readonly providerId = "codex";
-  readonly displayName = "Codex";
+  readonly providerId: string;
+  readonly displayName: string;
 
   private readonly codexHome: string;
+  private readonly explicitHome: boolean;
   private readonly fetchApi: ProviderApiFetch;
 
   constructor(options: CodexQuotaProviderOptions) {
+    this.providerId = options.providerId ?? "codex";
+    this.displayName = options.displayName ?? "Codex";
+    this.explicitHome = Boolean(options.codexHome);
     this.codexHome = options.codexHome || process.env["CODEX_HOME"] || join(homedir(), ".codex");
     this.fetchApi = options.fetch ?? fetch;
   }
@@ -170,11 +176,13 @@ export class CodexQuotaProvider implements ProviderUsageFetcher {
   }
 
   private async readCodexAuth(): Promise<CodexAuth | null> {
-    const candidates = [
-      ...(process.env["CODEX_HOME"] ? [join(process.env["CODEX_HOME"], "auth.json")] : []),
-      join(homedir(), ".config", "codex", "auth.json"),
-      join(this.codexHome, "auth.json"),
-    ];
+    const candidates = this.explicitHome
+      ? [join(this.codexHome, "auth.json")]
+      : [
+          ...(process.env["CODEX_HOME"] ? [join(process.env["CODEX_HOME"], "auth.json")] : []),
+          join(homedir(), ".config", "codex", "auth.json"),
+          join(this.codexHome, "auth.json"),
+        ];
     for (const path of candidates) {
       if (!existsSync(path)) continue;
       try {

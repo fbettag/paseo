@@ -10,6 +10,7 @@ import { CursorQuotaProvider } from "./providers/cursor.js";
 import { GrokQuotaProvider } from "./providers/grok.js";
 import { KimiQuotaProvider } from "./providers/kimi.js";
 import { MiniMaxQuotaProvider } from "./providers/minimax.js";
+import { QwenQuotaProvider } from "./providers/qwen.js";
 import { ZaiQuotaProvider } from "./providers/zai.js";
 
 export const PROVIDER_USAGE_FETCHERS: readonly ProviderUsageFetcherManifestEntry[] = [
@@ -40,6 +41,10 @@ export const PROVIDER_USAGE_FETCHERS: readonly ProviderUsageFetcherManifestEntry
   {
     providerId: "zai",
     create: (options) => new ZaiQuotaProvider({ logger: options.logger, fetch: options.fetch }),
+  },
+  {
+    providerId: "qwen",
+    create: (options) => new QwenQuotaProvider({ logger: options.logger, fetch: options.fetch }),
   },
   {
     providerId: "grok",

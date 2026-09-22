@@ -30,6 +30,22 @@ export function fetchProviderApi(
   });
 }
 
+export function exhaustedUsage(
+  provider: { providerId: string; displayName: string },
+  label: string,
+): ProviderUsage {
+  return {
+    providerId: provider.providerId,
+    displayName: provider.displayName,
+    status: "available",
+    planLabel: null,
+    windows: [windowFromUsedPct({ id: "plan", label, utilizationPct: 100 })],
+    balances: [],
+    details: [],
+    error: null,
+  };
+}
+
 export function unavailableUsage(provider: {
   providerId: string;
   displayName: string;

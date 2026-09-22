@@ -429,7 +429,7 @@ describe("real provider usage fetchers", () => {
           fetch: fetchThroughTestDouble,
           homeDir: options.cursorHomeDir,
         }),
-        new ZaiQuotaProvider({ logger, fetch: fetchThroughTestDouble }),
+        new ZaiQuotaProvider({ logger, fetch: fetchThroughTestDouble, paseoHome: homeDir }),
         new GrokQuotaProvider({
           logger,
           fetch: fetchThroughTestDouble,

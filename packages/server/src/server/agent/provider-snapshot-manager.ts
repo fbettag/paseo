@@ -14,9 +14,15 @@ import {
   filterSelectableAgentModels,
   type AgentClient,
   type AgentCreateConfigParent,
+  type AgentCreateSessionOptions,
+  type AgentLaunchContext,
   type AgentMode,
   type AgentModelDefinition,
+  type AgentPersistenceHandle,
   type AgentProvider,
+  type AgentResumeSessionOptions,
+  type AgentSession,
+  type AgentSessionConfig,
   type FetchCatalogOptions,
   type ProviderSnapshotEntry,
 } from "./agent-sdk-types.js";
@@ -51,6 +57,10 @@ import {
 } from "./agent-configuration-validator.js";
 import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
+import { JEV_PROVIDER_ID, type JevRouterPorts } from "./providers/jev-agent.js";
+import type { EnabledModel, RouteJudgment } from "../jev/model-router.js";
+import type { ProviderUsage } from "@getpaseo/protocol/messages";
+import { blockedProviderIds } from "../jev/usage-block.js";
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 120_000;
 const MAX_REFRESH_TIMEOUT_MS = 2_147_483_647;
@@ -122,6 +132,7 @@ export interface ProviderSnapshotManagerOptions {
   refreshTimeoutMs?: number;
   diagnosticTimeoutMs?: number;
   openCodeBridge?: OpenCodeBridge;
+  routeJudge?: (prompt: string) => Promise<RouteJudgment | null>;
 }
 
 interface ProviderSnapshotRefreshOptions {
@@ -249,6 +260,9 @@ export class ProviderSnapshotManager {
   private readonly openCodeBridge?: OpenCodeBridge;
   private readonly isDev: boolean;
   private readonly extraClients: Partial<Record<AgentProvider, AgentClient>>;
+  private readonly routeJudge?: (prompt: string) => Promise<RouteJudgment | null>;
+  private readonly jevPorts: JevRouterPorts;
+  private jevUsageLookup: (() => Promise<readonly ProviderUsage[]>) | null = null;
   private runtimeSettings: AgentProviderRuntimeSettingsMap | undefined;
   private providerOverrides: Record<string, ProviderOverride> | undefined;
   private baseProviderOverrides: Record<string, ProviderOverride> | undefined;
@@ -275,6 +289,16 @@ export class ProviderSnapshotManager {
       options.diagnosticTimeoutMs,
       this.refreshTimeoutMs,
     );
+    this.routeJudge = options.routeJudge;
+    this.jevPorts = {
+      listCandidates: (cwd) => this.listJevCandidates(cwd),
+      openSession: (providerId, config, launchContext, sessionOptions) =>
+        this.openJevSession(providerId, config, launchContext, sessionOptions),
+      resumeSession: (providerId, handle, overrides, launchContext, sessionOptions) =>
+        this.resumeJevSession(providerId, handle, overrides, launchContext, sessionOptions),
+      judge: (prompt) => this.judgeJevRoute(prompt),
+      blockedProviders: () => this.blockedJevProviders(),
+    };
     this.generation = this.createGeneration(
       this.buildRegistry(this.runtimeSettings, this.providerOverrides),
       this.providerOverrides,
@@ -436,6 +460,96 @@ export class ProviderSnapshotManager {
     clients[provider] = client;
     this.ownedClients.add(client);
     return client;
+  }
+
+  private async listJevCandidates(cwd?: string): Promise<EnabledModel[]> {
+    const entries = await this.listProviders({ cwd, wait: true });
+    const candidates: EnabledModel[] = [];
+    for (const entry of entries) {
+      if (entry.provider === JEV_PROVIDER_ID || !entry.enabled || entry.status !== "ready") {
+        continue;
+      }
+      for (const model of filterSelectableAgentModels(entry.models)) {
+        candidates.push({
+          providerId: entry.provider,
+          providerLabel: entry.label ?? entry.provider,
+          modelId: model.id,
+          label: model.label,
+          description: model.description,
+          isDefault: model.isDefault === true,
+        });
+      }
+    }
+    return candidates;
+  }
+
+  private async openJevSession(
+    providerId: string,
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+    sessionOptions?: AgentCreateSessionOptions,
+  ): Promise<AgentSession> {
+    return this.requireDelegatedClient(providerId).createSession(
+      config,
+      launchContext,
+      sessionOptions,
+    );
+  }
+
+  private async resumeJevSession(
+    providerId: string,
+    handle: AgentPersistenceHandle,
+    overrides?: Partial<AgentSessionConfig>,
+    launchContext?: AgentLaunchContext,
+    sessionOptions?: AgentResumeSessionOptions,
+  ): Promise<AgentSession> {
+    return this.requireDelegatedClient(providerId).resumeSession(
+      handle,
+      overrides,
+      launchContext,
+      sessionOptions,
+    );
+  }
+
+  private requireDelegatedClient(providerId: string): AgentClient {
+    if (providerId === JEV_PROVIDER_ID) {
+      throw new Error("Jev cannot route to itself");
+    }
+    const definition = this.generation.definitions[providerId];
+    if (!definition?.enabled) {
+      throw new Error(`Provider '${providerId}' is not available for Jev routing`);
+    }
+    return this.ensureClient(providerId, definition);
+  }
+
+  setJevUsageLookup(lookup: (() => Promise<readonly ProviderUsage[]>) | null): void {
+    this.jevUsageLookup = lookup;
+  }
+
+  private async blockedJevProviders(): Promise<ReadonlySet<string>> {
+    const lookup = this.jevUsageLookup;
+    if (!lookup) return new Set();
+    try {
+      const usages = await withTimeout(
+        lookup(),
+        2_500,
+        "Timed out reading provider usage for Jev routing",
+      );
+      return blockedProviderIds(usages);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Jev usage lookup failed");
+      return new Set();
+    }
+  }
+
+  private async judgeJevRoute(prompt: string): Promise<RouteJudgment | null> {
+    if (!this.routeJudge) return null;
+    try {
+      return await this.routeJudge(prompt);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Jev route judgment failed");
+      return null;
+    }
   }
 
   async listProviders(input: ProviderSnapshotReadOptions = {}): Promise<ProviderSnapshotEntry[]> {
@@ -692,6 +806,7 @@ export class ProviderSnapshotManager {
       workspaceGitService: this.workspaceGitService,
       managedProcesses: this.managedProcesses,
       openCodeBridge: this.openCodeBridge,
+      jevPorts: this.jevPorts,
       isDev: this.isDev,
     });
 

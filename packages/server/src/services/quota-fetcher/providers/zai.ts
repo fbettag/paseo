@@ -2,7 +2,13 @@ import type { Logger } from "pino";
 import { z } from "zod";
 import type { ProviderUsage, ProviderUsageDetail } from "../../../server/messages.js";
 import type { ProviderApiFetch, ProviderUsageFetcher } from "../provider.js";
-import { ApiOptionalStringSchema, fetchProviderApi, unavailableUsage } from "../usage.js";
+import { readPaseoKey } from "../paseo-key.js";
+import {
+  ApiOptionalStringSchema,
+  exhaustedUsage,
+  fetchProviderApi,
+  unavailableUsage,
+} from "../usage.js";
 
 const ZaiUsageResponseSchema = z.object({
   data: z
@@ -20,6 +26,7 @@ const ZaiUsageResponseSchema = z.object({
 interface ZaiQuotaProviderOptions {
   logger: Logger;
   fetch?: ProviderApiFetch;
+  paseoHome?: string;
 }
 
 export class ZaiQuotaProvider implements ProviderUsageFetcher {
@@ -28,14 +35,16 @@ export class ZaiQuotaProvider implements ProviderUsageFetcher {
 
   private readonly logger: Logger;
   private readonly fetchApi: ProviderApiFetch;
+  private readonly paseoHome?: string;
 
   constructor(options: ZaiQuotaProviderOptions) {
     this.logger = options.logger;
     this.fetchApi = options.fetch ?? fetch;
+    this.paseoHome = options.paseoHome;
   }
 
   async fetchUsage(): Promise<ProviderUsage> {
-    const token = process.env["ZAI_API_KEY"] || process.env["GLM_API_KEY"];
+    const token = await this.readToken();
     if (!token) return unavailableUsage(this);
 
     const res = await fetchProviderApi(
@@ -49,14 +58,17 @@ export class ZaiQuotaProvider implements ProviderUsageFetcher {
       },
     );
 
+    if (res.status === 401 || res.status === 403) {
+      return exhaustedUsage(this, "Subscription");
+    }
     if (!res.ok) {
       this.logger.debug({ status: res.status }, "Z.ai usage fetch failed");
       return unavailableUsage(this);
     }
 
     const resp = ZaiUsageResponseSchema.parse(await res.json());
-    const sub = resp.data?.[0];
-    if (!sub) return unavailableUsage(this);
+    const sub = resp.data?.find((item) => item.status?.toUpperCase() === "VALID");
+    if (!sub) return exhaustedUsage(this, "Subscription");
 
     const details: ProviderUsageDetail[] = [];
     if (sub.status) details.push({ id: "status", label: "Status", value: sub.status });
@@ -75,5 +87,13 @@ export class ZaiQuotaProvider implements ProviderUsageFetcher {
       details,
       error: null,
     };
+  }
+
+  private async readToken(): Promise<string | null> {
+    const fromEnv = process.env["ZAI_API_KEY"]?.trim() || process.env["GLM_API_KEY"]?.trim();
+    if (fromEnv) return fromEnv;
+    return (
+      (await readPaseoKey("glm", this.paseoHome)) ?? (await readPaseoKey("zai", this.paseoHome))
+    );
   }
 }
