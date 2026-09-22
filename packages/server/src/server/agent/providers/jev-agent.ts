@@ -16,6 +16,7 @@ import type {
   AgentRunResult,
   AgentSession,
   AgentSessionConfig,
+  AgentSlashCommand,
   AgentStreamEvent,
   FetchCatalogOptions,
   ProviderCatalog,
@@ -26,7 +27,10 @@ import type {
 import type { AgentMetadata } from "@getpaseo/protocol/agent-types";
 import {
   classifyEnabledModel,
+  type ClassifiedModel,
   heuristicRouteJudgment,
+  heuristicShouldContinue,
+  meetsReasoningFloor,
   pinFromDecision,
   readJevReasoningEffort,
   routeModels,
@@ -117,6 +121,7 @@ export interface JevRouterPorts {
     options?: AgentResumeSessionOptions,
   ): Promise<AgentSession>;
   judge(prompt: string): Promise<RouteJudgment | null>;
+  judgeContinue?(question: string, goal: string): Promise<boolean | null>;
   blockedProviders(): Promise<ReadonlySet<string>>;
   listProviderModes?(cwd?: string): Promise<Readonly<Record<string, { id: string }[]>>>;
 }
@@ -212,6 +217,8 @@ class JevAgentSession implements AgentSession {
   private providerModes: Readonly<Record<string, { id: string }[]>> = {};
   private recentUserTexts: string[] = [];
   private reasoningEffort: JevReasoningEffort;
+  private lastAssistantText = "";
+  private autoFollowUps = 0;
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -364,6 +371,18 @@ class JevAgentSession implements AgentSession {
     };
   }
 
+  async listCommands(): Promise<AgentSlashCommand[]> {
+    const inner = this.inner;
+    if (!inner?.listCommands) return [];
+    return inner.listCommands();
+  }
+
+  tryHandleOutOfBand(
+    prompt: AgentPromptInput,
+  ): ReturnType<NonNullable<AgentSession["tryHandleOutOfBand"]>> | null {
+    return this.inner?.tryHandleOutOfBand?.(prompt) ?? null;
+  }
+
   async interrupt(): Promise<void> {
     await this.inner?.interrupt();
   }
@@ -397,10 +416,15 @@ class JevAgentSession implements AgentSession {
     if (!ports) {
       throw new Error("Jev routing is not connected to the daemon");
     }
+    if (text !== AUTO_CONTINUE_PROMPT) this.autoFollowUps = 0;
     const task = routeTaskText(text, this.recentUserTexts);
     const candidates = (await ports.listCandidates(this.config.cwd)).map(classifyEnabledModel);
     this.providerModes = (await ports.listProviderModes?.(this.config.cwd)) ?? this.providerModes;
     const blocked = await this.readBlockedProviders(ports);
+    if (this.inner && this.decision && this.modelStillHeld(candidates, blocked)) {
+      this.rememberUserText(text);
+      return this.inner;
+    }
     let judgment: RouteJudgment | null = null;
     try {
       judgment = await ports.judge(task);
@@ -431,35 +455,85 @@ class JevAgentSession implements AgentSession {
       },
       "Jev routed a turn",
     );
+    return this.applyDecision(ports, decision);
+  }
+
+  private async applyDecision(
+    ports: JevRouterPorts,
+    decision: RouteDecision,
+  ): Promise<AgentSession> {
     if (!this.inner || (this.decision && decision.providerId !== this.decision.providerId)) {
       return this.openProvider(ports, decision);
     }
-    // A different model id starts a new provider prefix cache. Same id keeps it.
-    if (
-      this.decision &&
-      this.decision.providerId === decision.providerId &&
-      this.decision.modelId !== decision.modelId &&
-      this.inner.setModel
-    ) {
-      try {
-        await this.inner.setModel(decision.modelId);
-      } catch (error) {
-        this.logger.warn({ err: error, model: decision.modelId }, "Jev model switch failed");
-        return this.inner;
-      }
-      this.emitNotice(decision);
-    }
+    const switched = await this.switchModel(decision);
+    if (!switched) return this.inner;
     this.decision = decision;
     return this.inner;
+  }
+
+  private async switchModel(decision: RouteDecision): Promise<boolean> {
+    if (!this.inner || !this.decision) return true;
+    if (this.decision.providerId !== decision.providerId) return true;
+    if (this.decision.modelId === decision.modelId || !this.inner.setModel) return true;
+    try {
+      await this.inner.setModel(decision.modelId);
+    } catch (error) {
+      this.logger.warn({ err: error, model: decision.modelId }, "Jev model switch failed");
+      return false;
+    }
+    this.emitNotice(decision);
+    return true;
   }
 
   private mappedMode(providerId: string): string | undefined {
     return mapJevPermissionMode(this.permissionMode, this.providerModes[providerId] ?? []);
   }
 
+  private modelStillHeld(
+    candidates: readonly ClassifiedModel[],
+    blocked: ReadonlySet<string>,
+  ): boolean {
+    const decision = this.decision;
+    if (!decision) return false;
+    if (blocked.has(decision.providerId)) return false;
+    if (!meetsReasoningFloor(decision.tier, this.reasoningEffort)) return false;
+    return candidates.some(
+      (model) => model.providerId === decision.providerId && model.modelId === decision.modelId,
+    );
+  }
+
+  private async maybeAutoContinue(): Promise<void> {
+    if (this.autoFollowUps >= 2 || !this.inner) return;
+    const question = this.lastAssistantText.trim();
+    const goal = this.recentUserTexts.filter((entry) => entry !== AUTO_CONTINUE_PROMPT).join("\n");
+    const ports = this.ports;
+    let shouldContinue = heuristicShouldContinue(question, goal);
+    if (ports?.judgeContinue) {
+      try {
+        const judged = await ports.judgeContinue(question, goal);
+        if (judged !== null) shouldContinue = judged;
+      } catch (error) {
+        this.logger.warn({ err: error }, "Jev continuation judgment failed");
+      }
+    }
+    if (!shouldContinue) return;
+    this.autoFollowUps += 1;
+    this.lastAssistantText = "";
+    this.emitNoticeText("Jev macht weiter, das Ziel ist noch offen.");
+    await this.startPrompt(AUTO_CONTINUE_PROMPT, undefined);
+  }
+
+  private emitNoticeText(message: string): void {
+    this.emit({
+      type: "timeline",
+      provider: JEV_PROVIDER_ID,
+      item: { type: "notification", level: "info", message },
+    });
+  }
+
   private rememberUserText(text: string): void {
     const trimmed = text.trim().slice(0, 500);
-    if (!trimmed || trimmed.startsWith("/")) return;
+    if (!trimmed || trimmed.startsWith("/") || trimmed === AUTO_CONTINUE_PROMPT) return;
     this.recentUserTexts.push(trimmed);
     if (this.recentUserTexts.length > 6) this.recentUserTexts.shift();
   }
@@ -508,7 +582,14 @@ class JevAgentSession implements AgentSession {
     this.decision = decision;
     this.unsubscribeInner = inner.subscribe((event) => {
       const tagged = retag(event);
-      if (tagged) this.emit(tagged);
+      if (!tagged) return;
+      if (tagged.type === "timeline" && tagged.item.type === "assistant_message") {
+        this.lastAssistantText = tagged.item.text;
+      }
+      this.emit(tagged);
+      if (tagged.type === "turn_completed") {
+        void this.enqueue(() => this.maybeAutoContinue());
+      }
     });
     const handle = this.describePersistence();
     if (handle?.sessionId) {
@@ -572,6 +653,9 @@ function promptText(prompt: AgentPromptInput): string {
   }
   return parts.join("\n");
 }
+
+const AUTO_CONTINUE_PROMPT =
+  "Weiter. Das Ziel ist noch offen. Triff die naheliegende Entscheidung und arbeite weiter, ohne nachzufragen.";
 
 function retag(event: AgentStreamEvent): AgentStreamEvent | null {
   if (event.type === "mode_changed") return null;
