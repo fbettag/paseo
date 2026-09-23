@@ -263,6 +263,8 @@ describe("routeModels", () => {
     expect(heuristicShouldContinue("Soll ich den Bug jetzt fixen?", goal)).toBe(true);
     expect(heuristicShouldContinue("Soll ich mit dem Backup-Restore anfangen?", goal)).toBe(false);
     expect(heuristicShouldContinue("Der Collector läuft.", goal)).toBe(false);
+    expect(heuristicShouldContinue("Pipeline 5603 läuft. Ich bleibe dran.", goal)).toBe(true);
+    expect(heuristicShouldContinue('Bestätigen: "Allow" klicken (@e9)', goal)).toBe(true);
   });
 
   it("treats continue as the earlier task, not as a new quick prompt", () => {

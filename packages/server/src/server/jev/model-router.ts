@@ -101,7 +101,7 @@ const CONTINUATION_CUE =
 const CORRECTION_CUE =
   /komplexit|nicht verstanden|nochmal|noch mal|schau genauer|bevor du|überleg|ueberleg|look again|did not understand|didn't understand|wrong approach/i;
 const STAKES_CUE =
-  /docker|kubernetes|\bk8s\b|deploy|migrate|migration|postgres|datenbank|database|restart|collector|kollektor|monitor|dropdb|production|löschen|delete|stoppen|starten/i;
+  /docker|kubernetes|\bk8s\b|deploy|migrate|migration|postgres|datenbank|database|restart|collector|kollektor|monitor|dropdb|production|löschen|delete|stoppen|starten|loop\.md|go live|apple review|simulator/i;
 
 export function isContinuationCue(text: string): boolean {
   const trimmed = text.trim();
@@ -343,6 +343,8 @@ export async function judgeRoutePrompt(
 
 const NEXT_STEP_QUESTION =
   /soll ich|willst du|welcher weg|bereit zu|oder sollen|nächster schritt|naechster schritt/i;
+const UNFINISHED_WORK =
+  /bleib(?:e)? dran|warte weiter|pipeline \d+ läuft|klicken|bestätigen|bestatigen|@e\d+|yes, i just ran/i;
 const BLOCKING_STEP =
   /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy/i;
 
@@ -352,12 +354,15 @@ export function looksLikeNextStepQuestion(text: string): boolean {
   return NEXT_STEP_QUESTION.test(trimmed);
 }
 
-// A covered next step can continue. Anything destructive, or anything the goal
-// does not already authorize, still waits for the user.
+export function looksLikeUnfinishedWork(text: string): boolean {
+  return UNFINISHED_WORK.test(text);
+}
+
+// The open goal already covers the next step. A destructive step still waits.
 export function heuristicShouldContinue(question: string, goal: string): boolean {
-  if (!looksLikeNextStepQuestion(question)) return false;
   if (BLOCKING_STEP.test(question)) return false;
-  return goal.trim().length > 0;
+  if (goal.trim().length === 0) return false;
+  return looksLikeNextStepQuestion(question) || looksLikeUnfinishedWork(question);
 }
 
 export async function judgeShouldContinue(

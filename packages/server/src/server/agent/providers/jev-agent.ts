@@ -30,7 +30,6 @@ import {
   type ClassifiedModel,
   heuristicRouteJudgment,
   heuristicShouldContinue,
-  meetsReasoningFloor,
   pinFromDecision,
   readJevReasoningEffort,
   routeModels,
@@ -496,31 +495,39 @@ class JevAgentSession implements AgentSession {
     const decision = this.decision;
     if (!decision) return false;
     if (blocked.has(decision.providerId)) return false;
-    if (!meetsReasoningFloor(decision.tier, this.reasoningEffort)) return false;
     return candidates.some(
       (model) => model.providerId === decision.providerId && model.modelId === decision.modelId,
     );
   }
 
   private async maybeAutoContinue(): Promise<void> {
-    if (this.autoFollowUps >= 2 || !this.inner) return;
+    if (this.autoFollowUps >= 4 || !this.inner) return;
     const question = this.lastAssistantText.trim();
     const goal = this.recentUserTexts.filter((entry) => entry !== AUTO_CONTINUE_PROMPT).join("\n");
-    const ports = this.ports;
-    let shouldContinue = heuristicShouldContinue(question, goal);
-    if (ports?.judgeContinue) {
-      try {
-        const judged = await ports.judgeContinue(question, goal);
-        if (judged !== null) shouldContinue = judged;
-      } catch (error) {
-        this.logger.warn({ err: error }, "Jev continuation judgment failed");
-      }
-    }
+    const shouldContinue = await this.decideAutoContinue(question, goal);
     if (!shouldContinue) return;
     this.autoFollowUps += 1;
     this.lastAssistantText = "";
     this.emitNoticeText("Jev macht weiter, das Ziel ist noch offen.");
     await this.startPrompt(AUTO_CONTINUE_PROMPT, undefined);
+  }
+
+  private async decideAutoContinue(question: string, goal: string): Promise<boolean> {
+    if (BLOCKING_STEP.test(question)) return false;
+    if (heuristicShouldContinue(question, goal)) return true;
+    const judged = await this.askContinue(question, goal);
+    return judged === true;
+  }
+
+  private async askContinue(question: string, goal: string): Promise<boolean | null> {
+    const judge = this.ports?.judgeContinue;
+    if (!judge) return null;
+    try {
+      return await judge(question, goal);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Jev continuation judgment failed");
+      return null;
+    }
   }
 
   private emitNoticeText(message: string): void {
@@ -655,7 +662,9 @@ function promptText(prompt: AgentPromptInput): string {
 }
 
 const AUTO_CONTINUE_PROMPT =
-  "Weiter. Das Ziel ist noch offen. Triff die naheliegende Entscheidung und arbeite weiter, ohne nachzufragen.";
+  "Weiter. Das Ziel ist schon freigegeben. Klicke selbst, prüfe laufende Jobs und benutze Browser und Shell. Frag nicht nach dem nächsten Schritt. Stoppe nur bei Löschen, Backup, einem Geheimnis oder einem anderen Projekt.";
+const BLOCKING_STEP =
+  /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy/i;
 
 function retag(event: AgentStreamEvent): AgentStreamEvent | null {
   if (event.type === "mode_changed") return null;
