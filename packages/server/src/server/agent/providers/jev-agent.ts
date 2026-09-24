@@ -218,6 +218,7 @@ class JevAgentSession implements AgentSession {
   private reasoningEffort: JevReasoningEffort;
   private lastAssistantText = "";
   private autoFollowUps = 0;
+  private failedModels = new Set<string>();
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
@@ -396,16 +397,34 @@ class JevAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: AgentRunOptions | undefined,
   ): Promise<AgentRunResult> {
-    const inner = await this.ensureRouted(prompt);
-    return inner.run(prompt, options);
+    return this.withLaunchFailover(prompt, (inner) => inner.run(prompt, options));
   }
 
   private async startPrompt(
     prompt: AgentPromptInput,
     options: AgentRunOptions | undefined,
   ): Promise<{ turnId: string }> {
-    const inner = await this.ensureRouted(prompt);
-    return inner.startTurn(prompt, options);
+    return this.withLaunchFailover(prompt, (inner) => inner.startTurn(prompt, options));
+  }
+
+  private async withLaunchFailover<T>(
+    prompt: AgentPromptInput,
+    run: (inner: AgentSession) => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const inner = await this.ensureRouted(prompt);
+      try {
+        return await run(inner);
+      } catch (error) {
+        lastError = error;
+        if (!isHarnessLaunchFailure(error) || !this.decision) throw error;
+        await this.abandonFailedLaunch(error);
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("No enabled model could start for Jev.");
   }
 
   private async ensureRouted(prompt: AgentPromptInput): Promise<AgentSession> {
@@ -417,7 +436,9 @@ class JevAgentSession implements AgentSession {
     }
     if (text !== AUTO_CONTINUE_PROMPT) this.autoFollowUps = 0;
     const task = routeTaskText(text, this.recentUserTexts);
-    const candidates = (await ports.listCandidates(this.config.cwd)).map(classifyEnabledModel);
+    const candidates = (await ports.listCandidates(this.config.cwd))
+      .map(classifyEnabledModel)
+      .filter((model) => !this.failedModels.has(modelKey(model.providerId, model.modelId)));
     this.providerModes = (await ports.listProviderModes?.(this.config.cwd)) ?? this.providerModes;
     const blocked = await this.readBlockedProviders(ports);
     if (this.inner && this.decision && this.modelStillHeld(candidates, blocked)) {
@@ -444,15 +465,18 @@ class JevAgentSession implements AgentSession {
     }
     this.logger.info(
       {
-        provider: decision.providerId,
-        model: decision.modelId,
+        blocked: [...blocked].sort(),
+        eligible: candidates
+          .filter((model) => !blocked.has(model.providerId))
+          .map((model) => `${model.providerId}/${model.modelId}`),
+        chosen: `${decision.providerId}/${decision.modelId}`,
         kind: decision.kind,
         tier: decision.tier,
         kept: decision.kept,
         fallback: decision.fallback,
         demand: Number(decision.demand.toFixed(2)),
       },
-      "Jev routed a turn",
+      "Jev usage check",
     );
     return this.applyDecision(ports, decision);
   }
@@ -541,6 +565,7 @@ class JevAgentSession implements AgentSession {
   private rememberUserText(text: string): void {
     const trimmed = text.trim().slice(0, 500);
     if (!trimmed || trimmed.startsWith("/") || trimmed === AUTO_CONTINUE_PROMPT) return;
+    if (this.recentUserTexts[this.recentUserTexts.length - 1] === trimmed) return;
     this.recentUserTexts.push(trimmed);
     if (this.recentUserTexts.length > 6) this.recentUserTexts.shift();
   }
@@ -558,6 +583,38 @@ class JevAgentSession implements AgentSession {
     } catch (error) {
       this.logger.warn({ err: error }, "Jev usage lookup failed");
       return new Set();
+    }
+  }
+
+  private async abandonFailedLaunch(error: unknown): Promise<void> {
+    const decision = this.decision;
+    if (!decision) return;
+    this.failedModels.add(modelKey(decision.providerId, decision.modelId));
+    this.logger.warn(
+      {
+        err: error,
+        provider: decision.providerId,
+        model: decision.modelId,
+      },
+      "Jev harness did not start",
+    );
+    this.emitNoticeText(
+      `Jev · ${decision.providerLabel} · ${decision.label} did not start, trying another account.`,
+    );
+    await this.dropInner();
+  }
+
+  private async dropInner(): Promise<void> {
+    this.unsubscribeInner?.();
+    this.unsubscribeInner = null;
+    const previous = this.inner;
+    this.inner = null;
+    this.decision = null;
+    if (!previous) return;
+    try {
+      await previous.close();
+    } catch (error) {
+      this.logger.warn({ err: error }, "Jev failed to close a dead provider session");
     }
   }
 
@@ -659,6 +716,15 @@ function promptText(prompt: AgentPromptInput): string {
     if (block.type === "text") parts.push(block.text);
   }
   return parts.join("\n");
+}
+
+function modelKey(providerId: string, modelId: string): string {
+  return `${providerId}::${modelId}`;
+}
+
+function isHarnessLaunchFailure(error: unknown): boolean {
+  const text = error instanceof Error ? `${error.name} ${error.message}` : String(error);
+  return /unrecognized_model|ProcessTransport is not ready|Unknown model/i.test(text);
 }
 
 const AUTO_CONTINUE_PROMPT =

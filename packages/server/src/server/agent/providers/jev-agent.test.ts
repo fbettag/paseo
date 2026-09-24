@@ -33,6 +33,7 @@ class FakeSession implements AgentSession {
   readonly id = "native-1";
   readonly prompts: string[] = [];
   readonly switched: string[] = [];
+  failStart?: string;
 
   constructor(readonly provider: string) {}
 
@@ -44,6 +45,11 @@ class FakeSession implements AgentSession {
     prompt: AgentPromptInput,
     _options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    if (this.failStart) {
+      const message = this.failStart;
+      this.failStart = undefined;
+      throw new Error(message);
+    }
     this.prompts.push(typeof prompt === "string" ? prompt : "");
     return { turnId: `turn-${this.prompts.length}` };
   }
@@ -110,6 +116,13 @@ const MODELS: EnabledModel[] = [
     modelId: "gpt-daybreak-blue-latest",
     label: "Daybreak",
     description: "cybersecurity",
+  },
+  {
+    providerId: "glm",
+    providerLabel: "GLM",
+    modelId: "glm-5.3",
+    label: "GLM 5.3",
+    isDefault: true,
   },
   {
     providerId: "glm",
@@ -239,10 +252,39 @@ describe("JevAgentClient", () => {
     await session.startTurn("trace this exploit");
     blocked = new Set(["codex-work"]);
     await session.startTurn("continue the exploit trace");
-    expect(harness.opened.map((opened) => opened.providerId)).toEqual(["codex-work", "codex"]);
+    expect(harness.opened.map((opened) => opened.providerId)).toEqual(["codex-work", "glm"]);
     expect(notices[1]).toContain("previous account unavailable");
     expect(harness.sessions[0]?.prompts).toEqual(["trace this exploit"]);
     expect(harness.sessions[1]?.prompts).toEqual(["continue the exploit trace"]);
+  });
+
+  it("opens another account when the harness rejects the model", async () => {
+    const harness = ports(async () => ({
+      kind: "coding",
+      complexity: 0.6,
+      capability: 0.6,
+      deepReasoning: 0.2,
+    }));
+    const original = harness.ports.openSession;
+    harness.ports.openSession = async (providerId, config, launchContext, options) => {
+      const session = await original(providerId, config, launchContext, options);
+      if (providerId === "glm") {
+        (session as FakeSession).failStart = "unrecognized_model glm-5.3";
+      }
+      return session;
+    };
+    const client = new JevAgentClient(createTestLogger(), harness.ports);
+    const session = await client.createSession({ provider: "jev", cwd: "/tmp/repo" });
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("build the collector");
+    expect(harness.opened[0]).toEqual({ providerId: "glm", model: "glm-5.3" });
+    expect(harness.opened[1]?.providerId).not.toBe("glm");
+    expect(notices.some((line) => line.includes("did not start"))).toBe(true);
   });
 
   it("keeps the opened model so the provider cache stays warm", async () => {
