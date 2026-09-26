@@ -5137,7 +5137,7 @@ export class CodexAppServerAgentSession implements AgentSession {
       await this.reloadCodexProcessPreservingThread();
     } catch (error) {
       this.logger.warn({ err: error, threadId, rolloutPath }, "Jev compact reload failed");
-      if (!this.connected) {
+      if (this.connectionState === "disconnected") {
         await this.connect();
       }
       return false;
