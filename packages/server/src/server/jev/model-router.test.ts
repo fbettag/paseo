@@ -5,6 +5,7 @@ import {
   heuristicRouteJudgment,
   heuristicShouldContinue,
   isContinuationCue,
+  shouldAutoContinue,
   routeModels,
   routeTaskText,
   type ClassifiedModel,
@@ -262,9 +263,21 @@ describe("routeModels", () => {
     const goal = "bring the collector up locally and score shops";
     expect(heuristicShouldContinue("Soll ich den Bug jetzt fixen?", goal)).toBe(true);
     expect(heuristicShouldContinue("Soll ich mit dem Backup-Restore anfangen?", goal)).toBe(false);
+    expect(heuristicShouldContinue("Soll ich die Datenschutztexte anpassen?", goal)).toBe(false);
     expect(heuristicShouldContinue("Der Collector läuft.", goal)).toBe(false);
     expect(heuristicShouldContinue("Pipeline 5603 läuft. Ich bleibe dran.", goal)).toBe(true);
     expect(heuristicShouldContinue('Bestätigen: "Allow" klicken (@e9)', goal)).toBe(true);
+  });
+
+  it("does not auto-continue progress narration even when Jev says covered", () => {
+    const goal = "find the Bauer bug report in mailbox franz";
+    expect(
+      shouldAutoContinue("Ich durchsuche gerade die Mailbox franz mit himalaya.", goal, true),
+    ).toBe(false);
+    expect(shouldAutoContinue("Gegenprobe mit Nix:", goal, true)).toBe(false);
+    expect(shouldAutoContinue("Soll ich den Rate-Limit-Fix jetzt umsetzen?", goal, true)).toBe(
+      true,
+    );
   });
 
   it("treats continue as the earlier task, not as a new quick prompt", () => {

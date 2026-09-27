@@ -31,6 +31,7 @@ import {
   heuristicRouteJudgment,
   heuristicShouldContinue,
   pinFromDecision,
+  shouldAutoContinue,
   readJevReasoningEffort,
   routeModels,
   routeTaskText,
@@ -537,10 +538,10 @@ class JevAgentSession implements AgentSession {
   }
 
   private async decideAutoContinue(question: string, goal: string): Promise<boolean> {
-    if (BLOCKING_STEP.test(question)) return false;
     if (heuristicShouldContinue(question, goal)) return true;
+    if (!shouldAutoContinue(question, goal, true)) return false;
     const judged = await this.askContinue(question, goal);
-    return judged === true;
+    return shouldAutoContinue(question, goal, judged);
   }
 
   private async askContinue(question: string, goal: string): Promise<boolean | null> {
@@ -728,9 +729,7 @@ function isHarnessLaunchFailure(error: unknown): boolean {
 }
 
 const AUTO_CONTINUE_PROMPT =
-  "Weiter. Das Ziel ist schon freigegeben. Klicke selbst, prüfe laufende Jobs und benutze Browser und Shell. Frag nicht nach dem nächsten Schritt. Stoppe nur bei Löschen, Backup, einem Geheimnis oder einem anderen Projekt.";
-const BLOCKING_STEP =
-  /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy/i;
+  "Weiter. Das Ziel ist schon freigegeben. Klicke selbst, prüfe laufende Jobs und benutze Browser und Shell. Frag nicht nach dem nächsten Schritt. Stoppe nur bei Löschen, Backup, Rechtstexten, einem Geheimnis oder einem anderen Projekt. Warte nicht in einer Endlosschleife: die Bedingung muss sich ändern, hat eine Obergrenze, und ein angekündigter Check braucht ein gelesenes Ergebnis.";
 
 function retag(event: AgentStreamEvent): AgentStreamEvent | null {
   if (event.type === "mode_changed") return null;

@@ -346,7 +346,7 @@ const NEXT_STEP_QUESTION =
 const UNFINISHED_WORK =
   /bleib(?:e)? dran|warte weiter|pipeline \d+ läuft|klicken|bestätigen|bestatigen|@e\d+|yes, i just ran/i;
 const BLOCKING_STEP =
-  /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy/i;
+  /prune|backup|andere projekte|löschen|loeschen|drop database|produktion deploy|production deploy|datenschutz|rechtstext|privacy policy|\bavv\b|subprozessor/i;
 
 export function looksLikeNextStepQuestion(text: string): boolean {
   const trimmed = text.trim();
@@ -358,11 +358,31 @@ export function looksLikeUnfinishedWork(text: string): boolean {
   return UNFINISHED_WORK.test(text);
 }
 
+export function isBlockingContinueStep(text: string): boolean {
+  return BLOCKING_STEP.test(text);
+}
+
+export function looksLikeContinueCue(text: string): boolean {
+  return looksLikeNextStepQuestion(text) || looksLikeUnfinishedWork(text);
+}
+
 // The open goal already covers the next step. A destructive step still waits.
 export function heuristicShouldContinue(question: string, goal: string): boolean {
-  if (BLOCKING_STEP.test(question)) return false;
+  if (isBlockingContinueStep(question)) return false;
   if (goal.trim().length === 0) return false;
-  return looksLikeNextStepQuestion(question) || looksLikeUnfinishedWork(question);
+  return looksLikeContinueCue(question);
+}
+
+// Progress narration is not a stop. Jev may only continue an actual question or unfinished wait.
+export function shouldAutoContinue(
+  question: string,
+  goal: string,
+  judged: boolean | null,
+): boolean {
+  if (heuristicShouldContinue(question, goal)) return true;
+  if (isBlockingContinueStep(question)) return false;
+  if (!looksLikeContinueCue(question)) return false;
+  return judged === true;
 }
 
 export async function judgeShouldContinue(
