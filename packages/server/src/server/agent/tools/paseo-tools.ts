@@ -108,6 +108,7 @@ import {
   type PaseoToolResult,
 } from "./types.js";
 import { admitPaseoToolResult } from "../../jev/admit-tool-result.js";
+import { formatJevGrepResult, searchWithJev } from "../../jev/grep.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
 
@@ -723,6 +724,9 @@ function createToolCatalog(
       }
       const parsedInput = await parseToolInput(tool, input);
       const result = await tool.handler(parsedInput, context);
+      if (name === "jevgrep") {
+        return result;
+      }
       if (!options.jevPolicy?.toolAdmissionEnabled()) {
         childLogger.debug({ toolName: name }, "Jev admission skipped (disabled)");
         return result;
@@ -1350,6 +1354,54 @@ function createToolCatalog(
       resolveCallerAgent,
       jevPolicy: options.jevPolicy,
     });
+  }
+
+  if (options.jevPolicy) {
+    registerTool(
+      "jevgrep",
+      {
+        title: "Jevgrep",
+        description:
+          "Find source by asking what it does. Use this instead of Grep or rg when you do not know which file holds the behavior. Pass a repository question. Keep Grep for an exact symbol or regex. Returns ranked paths and verbatim excerpts.",
+        inputSchema: {
+          query: z
+            .string()
+            .trim()
+            .min(1)
+            .max(2_000)
+            .describe("Behavior question, for example where authentication is checked."),
+          root: z
+            .string()
+            .trim()
+            .min(1)
+            .optional()
+            .describe("Folder to search. Defaults to the agent working directory."),
+        },
+      },
+      async ({ query, root }, context) => {
+        const client = options.jevPolicy?.createClient();
+        if (!client) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Jev is not configured, so jevgrep did not start. Use Grep for an exact symbol.",
+              },
+            ],
+          };
+        }
+        const searchRoot = resolveScopedCwd(root);
+        const result = await searchWithJev({
+          query,
+          root: searchRoot,
+          ask: client,
+          signal: context.signal,
+        });
+        return {
+          content: [{ type: "text", text: formatJevGrepResult(result) }],
+        };
+      },
+    );
   }
 
   registerTool(
