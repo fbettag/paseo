@@ -2,7 +2,7 @@ import type { MutableJevConfig } from "@getpaseo/protocol/messages";
 import type { Logger } from "pino";
 
 import type { DaemonConfigStore } from "../daemon-config-store.js";
-import { JevClient, noulAnswer, resolveJevApiKey } from "./client.js";
+import { isLoopbackJevUrl, JevClient, noulAnswer, resolveJevApiKey } from "./client.js";
 import { DEFAULT_JEV_BASE_URL, resolveJevConfig } from "./defaults.js";
 
 export class DaemonConfigJevPolicy {
@@ -40,6 +40,7 @@ export class DaemonConfigJevPolicy {
 
   public hasApiKey(): boolean {
     const snapshot = this.snapshot();
+    if (snapshot.baseUrl && isLoopbackJevUrl(snapshot.baseUrl)) return true;
     return resolveJevApiKey({ apiKeyFile: snapshot.apiKeyFile }) !== null;
   }
 
