@@ -38,6 +38,26 @@ describe("Jev client", () => {
     expect(noulAnswer(answers, "keepResult")).toBe(0.81);
   });
 
+  it("asks a loopback OpenJev endpoint without an API key", async () => {
+    const client = new JevClient({
+      baseUrl: "http://127.0.0.1:8787/v1/systemone",
+      apiKeyFile: "/nonexistent-jev-key-for-test",
+      env: {},
+      fetch: async (url, init) => {
+        expect(String(url)).toBe("http://127.0.0.1:8787/v1/systemone");
+        expect(init?.headers).toEqual({ "content-type": "application/json" });
+        return new Response(JSON.stringify({ answers: { keepResult: { noul: 0.6 } } }), {
+          status: 200,
+        });
+      },
+    });
+    const answers = await client.ask({
+      state: { tool: "jevgrep" },
+      questions: { keepResult: { type: "noul", instructions: "Keep?" } },
+    });
+    expect(noulAnswer(answers, "keepResult")).toBe(0.6);
+  });
+
   it("throws when Jev omits answers", async () => {
     const client = new JevClient({
       apiKey: "test-key",

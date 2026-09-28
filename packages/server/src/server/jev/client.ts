@@ -43,6 +43,7 @@ export interface JevClientOptions {
   baseUrl?: string;
   apiKey?: string;
   apiKeyFile?: string;
+  env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   logger?: Logger;
 }
@@ -72,6 +73,15 @@ export function resolveJevApiKey(options: {
   }
 }
 
+export function isLoopbackJevUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 export function noulAnswer(answers: JevAnswers, name: string): number {
   const answer = answers[name];
   const noul = answer && "noul" in answer ? answer.noul : undefined;
@@ -96,12 +106,16 @@ export class JevClient {
   private readonly logger?: Logger;
 
   constructor(options: JevClientOptions = {}) {
-    const apiKey = resolveJevApiKey(options);
-    if (!apiKey) {
+    this.url = options.baseUrl?.trim() || DEFAULT_JEV_BASE_URL;
+    const apiKey = resolveJevApiKey({
+      apiKey: options.apiKey,
+      apiKeyFile: options.apiKeyFile,
+      env: options.env,
+    });
+    if (!apiKey && !isLoopbackJevUrl(this.url)) {
       throw new JevRequestError("TypeSafe API key is not configured");
     }
-    this.apiKey = apiKey;
-    this.url = options.baseUrl?.trim() || DEFAULT_JEV_BASE_URL;
+    this.apiKey = apiKey ?? "";
     this.fetchImpl = options.fetch ?? fetch;
     this.logger = options.logger;
   }
@@ -112,12 +126,13 @@ export class JevClient {
     const startedAt = Date.now();
     this.logger?.info({ host: requestHost(this.url), model, questionIds }, "Jev request started");
     try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
       const response = await this.fetchImpl(this.url, {
         method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
+        headers,
         body: JSON.stringify({
           model,
           state: params.state,
