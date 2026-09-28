@@ -25,6 +25,7 @@ import {
   session,
   shell,
   webContents,
+  dialog,
 } from "electron";
 import { registerDaemonManager } from "./daemon/daemon-manager.js";
 import { parsePassthroughCliArgsFromArgv, runPassthroughCli } from "./daemon/cli/passthrough.js";
@@ -79,6 +80,11 @@ import {
   listPaseoBrowserProfileGuests,
   readLegacyPaseoBrowserIds,
 } from "./features/browser-profile.js";
+import {
+  credentialIdForWebauthnChoice,
+  enableMacosBrowserPasskeys,
+  webauthnAccountLabel,
+} from "./features/browser-webauthn.js";
 import { parseOpenProjectPathFromArgv } from "./open-project-routing.js";
 import {
   createDesktopWindowOwner,
@@ -924,6 +930,30 @@ async function bootstrap(): Promise<void> {
   }
 
   await app.whenReady();
+  enableMacosBrowserPasskeys({
+    platform: process.platform,
+    app,
+    sessions: [session.fromPartition(PASEO_BROWSER_PROFILE_PARTITION)],
+    execPath: process.execPath,
+    env: process.env,
+    chooseAccount: async (relyingPartyId, accounts) => {
+      const options = {
+        type: "question" as const,
+        title: "Passkey",
+        message: `Choose a passkey for ${relyingPartyId}`,
+        buttons: [...accounts.map(webauthnAccountLabel), "Cancel"],
+        cancelId: accounts.length,
+        defaultId: 0,
+      };
+      const win = BrowserWindow.getFocusedWindow();
+      const result = win
+        ? await dialog.showMessageBox(win, options)
+        : await dialog.showMessageBox(options);
+      return credentialIdForWebauthnChoice(accounts, result.response);
+    },
+    logInfo: (message, meta) => log.info(message, meta),
+    logWarn: (message, meta) => log.warn(message, meta),
+  });
 
   const appDistDir = getAppDistDir();
   protocol.handle(APP_SCHEME, (request) => {
