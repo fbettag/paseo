@@ -5259,7 +5259,10 @@ export class CodexAppServerAgentSession implements AgentSession {
     }
     const threadId = this.currentThreadId;
     if (!threadId) return false;
-    const rolloutPath = findCodexRolloutFile(resolveCodexHomeDir(), threadId);
+    const rolloutPath = findCodexRolloutFile(
+      this.deps.codexHome ?? resolveCodexHomeDir(process.env),
+      threadId,
+    );
     if (!rolloutPath) {
       this.logger.warn({ threadId }, "Jev compact rollout not found");
       return false;
@@ -7318,7 +7321,9 @@ export class CodexAppServerAgentClient implements AgentClient {
     return {
       ...this.deps,
       jevCompact: launchContext?.jevCompact ?? this.deps.jevCompact,
-      codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchContext?.env)),
+      codexHome: resolveCodexHomeDir(
+        buildCodexAppServerEnv(this.runtimeSettings, launchContext?.env),
+      ),
       customCodexConfig: this.customProviderConfig(),
     };
   }
