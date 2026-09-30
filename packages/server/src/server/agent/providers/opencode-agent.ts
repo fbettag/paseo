@@ -350,12 +350,22 @@ type OpenCodeAgentConfig = Omit<AgentSessionConfig, "providerOptions"> & {
 
 const OPENCODE_SESSION_ENV_KEYS = new Set(["PASEO_AGENT_ID", "PASEO_AGENT_CWD"]);
 
+function mergeOpenCodeProcessEnv(
+  runtimeSettings?: ProviderRuntimeSettings,
+  launchContext?: AgentLaunchContext,
+): Record<string, string> {
+  return {
+    ...runtimeSettings?.env,
+    ...launchContext?.env,
+  };
+}
+
 function requiresDedicatedOpenCodeServer(
   config: OpenCodeAgentConfig,
-  launchContext?: AgentLaunchContext,
+  processEnv: Record<string, string>,
 ): boolean {
   if (config.mcpServers && Object.keys(config.mcpServers).length > 0) return true;
-  return Object.keys(launchContext?.env ?? {}).some((key) => !OPENCODE_SESSION_ENV_KEYS.has(key));
+  return Object.keys(processEnv).some((key) => !OPENCODE_SESSION_ENV_KEYS.has(key));
 }
 type OpenCodeMessageRole = "user" | "assistant";
 type OpenCodePersistedSession = OpenCodeSession | OpenCodeGlobalSession;
@@ -1602,9 +1612,11 @@ export class OpenCodeAgentClient implements AgentClient {
     config: OpenCodeAgentConfig,
     launchContext?: AgentLaunchContext,
   ): Promise<OpenCodeServerAcquisition> {
-    if (!this.bridge || requiresDedicatedOpenCodeServer(config, launchContext)) {
-      return launchContext?.env
-        ? this.serverManager.acquireDedicated(launchContext.env)
+    const processEnv = mergeOpenCodeProcessEnv(this.runtimeSettings, launchContext);
+    if (!this.bridge || requiresDedicatedOpenCodeServer(config, processEnv)) {
+      return Object.keys(processEnv).length > 0 ||
+        (config.mcpServers !== undefined && Object.keys(config.mcpServers).length > 0)
+        ? this.serverManager.acquireDedicated(processEnv)
         : this.serverManager.acquireCurrent();
     }
     return this.serverManager.acquireCurrent();

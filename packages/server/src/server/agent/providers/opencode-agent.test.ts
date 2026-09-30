@@ -4098,6 +4098,59 @@ describe("OpenCode adapter startTurn error handling", () => {
 });
 
 describe("OpenCodeAgentClient env", () => {
+  test("passes provider runtime env to dedicated server acquisition", async () => {
+    const runtime = new TestOpenCodeHarness();
+    const openCodeClient = new TestOpenCodeClient();
+    runtime.enqueueClient(openCodeClient);
+    const cwd = tmpCwd();
+    const client = new OpenCodeAgentClient(
+      createTestLogger(),
+      {
+        env: {
+          OPENCODE_CONFIG_DIR: "/tmp/opencode-blackbit",
+          OPENCODE_CONFIG_CONTENT: '{"provider":{"blackbit":{}}}',
+          BLACKBIT_API_KEY: "sk-test",
+        },
+      },
+      {
+        serverManager: runtime,
+        createClient: runtime.createClient,
+      },
+    );
+
+    try {
+      const session = await client.createSession(
+        {
+          provider: "opencode",
+          cwd,
+          model: "blackbit/deepseek_v4_flash_0731",
+        },
+        {
+          env: {
+            PASEO_AGENT_ID: "agent-1",
+            PASEO_AGENT_CWD: cwd,
+            TYPESAFE_API_KEY_FILE: "/run/secrets/typesafe-api-key",
+          },
+        },
+      );
+      await session.close();
+
+      expect(runtime.acquisitions[0]).toMatchObject({
+        kind: "dedicated",
+        env: {
+          OPENCODE_CONFIG_DIR: "/tmp/opencode-blackbit",
+          OPENCODE_CONFIG_CONTENT: '{"provider":{"blackbit":{}}}',
+          BLACKBIT_API_KEY: "sk-test",
+          PASEO_AGENT_ID: "agent-1",
+          PASEO_AGENT_CWD: cwd,
+          TYPESAFE_API_KEY_FILE: "/run/secrets/typesafe-api-key",
+        },
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test("passes launch-context env to env-specific server acquisition", async () => {
     const runtime = new TestOpenCodeHarness();
     const openCodeClient = new TestOpenCodeClient();
