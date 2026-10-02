@@ -37,10 +37,12 @@ class FakeSession implements AgentSession {
     readonly provider: string,
     readonly model: string | undefined,
     readonly internal: boolean,
+    private readonly runError?: Error,
   ) {}
 
   async run(prompt: AgentPromptInput): Promise<AgentRunResult> {
     this.prompts.push(typeof prompt === "string" ? prompt : "");
+    if (this.runError) throw this.runError;
     return { sessionId: this.id, finalText: "done", timeline: [] };
   }
 
@@ -102,7 +104,10 @@ const MODELS: EnabledModel[] = [
   },
 ];
 
-function ports(blocked: ReadonlySet<string> = new Set()): {
+function ports(
+  blocked: ReadonlySet<string> = new Set(),
+  runErrors: Readonly<Record<string, Error>> = {},
+): {
   ports: JevRouterPorts;
   opened: Array<{ providerId: string; model?: string; internal?: boolean }>;
   sessions: FakeSession[];
@@ -124,7 +129,12 @@ function ports(blocked: ReadonlySet<string> = new Set()): {
           model: config.model,
           internal: config.internal === true,
         });
-        const session = new FakeSession(providerId, config.model, config.internal === true);
+        const session = new FakeSession(
+          providerId,
+          config.model,
+          config.internal === true,
+          runErrors[providerId],
+        );
         sessions.push(session);
         return Promise.resolve(session);
       },
@@ -190,6 +200,33 @@ describe("SecurityAgentClient", () => {
       { providerId: "grok", model: "grok-4.6", internal: true },
     ]);
     expect(notices.some((line) => line.includes("fleet 2 workers"))).toBe(true);
+  });
+
+  it("skips Orca free workers with a short notice instead of the 402 JSON", async () => {
+    const harness = ports(new Set(), {
+      orcarouter: new Error(
+        '{"name":"APIError","data":{"statusCode":402,"responseBody":"{\\"error\\":{\\"code\\":\\"free_quota_exhausted\\",\\"metadata\\":{\\"reason\\":\\"err_free_used\\"}}}"}}',
+      ),
+    });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      usageWaitMs: 0,
+      slots: [{ model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 }],
+    });
+    const session = await client.createSession({
+      provider: "security",
+      cwd: "/tmp/repo",
+      model: "grok/grok-4.6",
+    });
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => noticesInclude(notices, "out of free usage"));
+    expect(notices.some((line) => line.includes("APIError"))).toBe(false);
+    expect(notices.filter((line) => line.includes("out of free usage"))).toHaveLength(2);
   });
 
   it("skips a blocked worker after the wait budget", async () => {

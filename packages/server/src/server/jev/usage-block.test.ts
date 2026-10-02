@@ -59,6 +59,18 @@ describe("usageBlocksProvider", () => {
     ).toBe(false);
   });
 
+  it("does not block paid Orca models when only the free allowance is spent", () => {
+    expect(
+      usageBlocksProvider(
+        usage({
+          providerId: "orcarouter",
+          planLabel: "Free used up",
+          windows: [{ id: "free", label: "Free allowance", usedPct: 100, remainingPct: 0 }],
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("blocks an inactive subscription reported by the provider", () => {
     expect(
       usageBlocksProvider(

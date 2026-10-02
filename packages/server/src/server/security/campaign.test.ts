@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   expandSlots,
+  parseCatalogModel,
   parseModelRef,
   runCampaign,
   type CampaignClock,
@@ -46,8 +47,27 @@ describe("parseModelRef", () => {
       providerId: "orcarouter",
       modelId: "orca/orcacyber-zero-1.0",
     });
+    expect(parseModelRef("orcarouter/orcarouter/free")).toEqual({
+      providerId: "orcarouter",
+      modelId: "orcarouter/free",
+    });
+    expect(parseModelRef("orcarouter/orcarouter/orcarouter/free")).toEqual({
+      providerId: "orcarouter",
+      modelId: "orcarouter/free",
+    });
     expect(parseModelRef("grok")).toBeNull();
     expect(parseModelRef("/model")).toBeNull();
+  });
+
+  it("strips a catalog provider prefix from OpenCode vendor ids", () => {
+    expect(parseCatalogModel("orcarouter", "orcarouter/orcarouter/free")).toEqual({
+      providerId: "orcarouter",
+      modelId: "orcarouter/free",
+    });
+    expect(parseCatalogModel("grok", "grok-4.6")).toEqual({
+      providerId: "grok",
+      modelId: "grok-4.6",
+    });
   });
 });
 
@@ -124,5 +144,36 @@ describe("runCampaign", () => {
       status: "failed",
       error: "boom",
     });
+  });
+
+  it("classifies an Orca 402 as skipped free usage and skips the other replica", async () => {
+    const calls: string[] = [];
+    const reports = await runCampaign({
+      slots: [{ model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 }],
+      fallback: null,
+      maxParallel: 1,
+      usageWaitMs: 0,
+      usagePollMs: 1000,
+      goal: "scan",
+      workerPrompt: (item) => item.key,
+      signal: new AbortController().signal,
+      ports: ports({
+        runWorker: async (item: CampaignItem) => {
+          calls.push(item.key);
+          throw new Error(
+            '{"name":"APIError","data":{"statusCode":402,"responseBody":"{\\"error\\":{\\"code\\":\\"free_quota_exhausted\\",\\"metadata\\":{\\"reason\\":\\"err_free_used\\"}}}"}}',
+          );
+        },
+      }),
+    });
+    expect(calls).toEqual(["orcarouter/orcarouter/free#1"]);
+    expect(
+      reports
+        .map((report) => [report.key, report.status, report.error] as const)
+        .sort((left, right) => left[0].localeCompare(right[0])),
+    ).toEqual([
+      ["orcarouter/orcarouter/free#1", "skipped-usage", "free"],
+      ["orcarouter/orcarouter/free#2", "skipped-usage", "free"],
+    ]);
   });
 });
