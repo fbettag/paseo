@@ -8,7 +8,10 @@ export interface ComposerControlPresence {
   fontScale: number;
 }
 
-export type ComposerFeatureControlPresence = { type: "toggle" } | { type: "select"; label: string };
+export type ComposerFeatureControlPresence =
+  | { type: "toggle" }
+  | { type: "select"; label: string }
+  | { type: "slots"; label: string };
 
 export interface ComposerControlPresentation {
   showCarets: boolean;

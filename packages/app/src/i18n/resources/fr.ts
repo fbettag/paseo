@@ -222,6 +222,16 @@ export const fr: TranslationResources = {
       on: "Activé",
       off: "Désactivé",
     },
+    slots: {
+      search: "Rechercher des modèles...",
+      clearSearch: "Effacer la recherche",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "Augmenter les réplicas",
+      decrease: "Diminuer les réplicas",
+      emptyHint: "Vide utilise deux copies du modèle manager.",
+      noMatches: "Aucun modèle ne correspond à la recherche.",
+    },
     mode: {
       title: "Mode",
       searchPlaceholder: "Rechercher un mode…",

@@ -106,7 +106,11 @@ describe("composer control layout", () => {
           hasModel: true,
           hasThinking: true,
           hasMode: true,
-          features: [{ type: "toggle" }, { type: "select", label: "Tools" }],
+          features: [
+            { type: "toggle" },
+            { type: "select", label: "Tools" },
+            { type: "slots", label: "Subagent models" },
+          ],
           fontScale: 1,
         },
       }),

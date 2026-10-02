@@ -49,6 +49,24 @@ describe("agent feature schemas", () => {
     expect(parsed.value).toBe("flex");
   });
 
+  it("parses valid slots features", () => {
+    const parsed = AgentFeatureSchema.parse({
+      type: "slots",
+      id: "slots",
+      label: "Subagent models",
+      value: [{ model: "grok/grok-4.6", replicas: 2 }],
+      options: [{ id: "grok/grok-4.6", label: "Grok 4.6" }],
+      minReplicas: 1,
+      maxReplicas: 8,
+    });
+
+    expect(parsed.type).toBe("slots");
+    if (parsed.type !== "slots") {
+      throw new Error("Expected slots feature");
+    }
+    expect(parsed.value).toEqual([{ model: "grok/grok-4.6", replicas: 2 }]);
+  });
+
   it.each(["icon", "label"])(
     "preserves the %s desktop trigger for any select feature",
     (desktopTrigger) => {
@@ -86,9 +104,20 @@ describe("agent feature schemas", () => {
       value: null,
     });
 
+    const invalidSlotsReplicas = AgentFeatureSchema.safeParse({
+      type: "slots",
+      id: "slots",
+      label: "Subagent models",
+      value: [{ model: "grok/grok-4.6", replicas: 0 }],
+      options: [],
+      minReplicas: 1,
+      maxReplicas: 8,
+    });
+
     expect(invalidDiscriminator.success).toBe(false);
     expect(missingToggleValue.success).toBe(false);
     expect(missingSelectOptions.success).toBe(false);
+    expect(invalidSlotsReplicas.success).toBe(false);
   });
 
   it("parses valid requests", () => {
