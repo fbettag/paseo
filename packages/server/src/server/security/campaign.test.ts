@@ -176,4 +176,30 @@ describe("runCampaign", () => {
       ["orcarouter/orcarouter/free#2", "skipped-usage", "free"],
     ]);
   });
+
+  it("emits each report as the worker finishes", async () => {
+    const seen: string[] = [];
+    await runCampaign({
+      slots: [
+        { model: "grok/grok-4.6", replicas: 1 },
+        { model: "glm/glm-5.3-flash", replicas: 1 },
+      ],
+      fallback: null,
+      maxParallel: 2,
+      usageWaitMs: 0,
+      usagePollMs: 1000,
+      goal: "scan",
+      workerPrompt: (item) => item.key,
+      signal: new AbortController().signal,
+      ports: ports({
+        blockedProviders: async () => new Set(["glm"]),
+      }),
+      onReport: (report) => {
+        seen.push(`${report.key}:${report.status}`);
+      },
+    });
+    expect(seen.sort()).toEqual(
+      ["glm/glm-5.3-flash#1:skipped-usage", "grok/grok-4.6#1:completed"].sort(),
+    );
+  });
 });

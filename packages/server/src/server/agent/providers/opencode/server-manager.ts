@@ -174,11 +174,12 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
 
   async acquireDedicated(env: Record<string, string>): Promise<OpenCodeServerAcquisition> {
     const server = await this.startServer(env);
+    const acquisition = this.acquireServer(server);
     server.retired = true;
     this.retiredServers.add(server);
-    const acquisition = this.acquireServer(server);
     try {
       await server.ready;
+      server.events.start();
       return acquisition;
     } catch (error) {
       await acquisition.release();
@@ -374,7 +375,7 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
         serverUrl: url,
         processExit,
         logger: this.logger,
-        listening: ready,
+        startImmediately: false,
       }),
       managedProcessRecord,
     };
@@ -483,6 +484,13 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
       this.retiredServers.delete(server);
       throw error;
     });
+    void server.ready.then(
+      () => {
+        server.events.start();
+        return undefined;
+      },
+      () => undefined,
+    );
 
     return server;
   }

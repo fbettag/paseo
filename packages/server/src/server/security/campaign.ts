@@ -46,6 +46,7 @@ export interface RunCampaignInput {
   workerPrompt: (item: CampaignItem, goal: string) => string;
   signal: AbortSignal;
   ports: CampaignPorts;
+  onReport?: (report: CampaignReport) => void;
 }
 
 export function parseModelRef(ref: string): ModelRef | null {
@@ -134,7 +135,9 @@ export async function runCampaign(input: RunCampaignInput): Promise<CampaignRepo
     while (!input.signal.aborted) {
       const item = queue.shift();
       if (!item) return;
-      reports.push(await runOne(item, input, skippedModels));
+      const report = await runOne(item, input, skippedModels);
+      reports.push(report);
+      input.onReport?.(report);
     }
   });
   await Promise.all(workers);

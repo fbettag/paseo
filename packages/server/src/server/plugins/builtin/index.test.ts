@@ -8,7 +8,12 @@ import { compilePlugin } from "../compiler.js";
 import { readPluginManifest } from "../manifest.js";
 import { DaemonClient } from "../../test-utils/daemon-client.js";
 import { createTestPaseoDaemon } from "../../test-utils/paseo-daemon.js";
-import { BuiltinPluginLoader, builtinPlugins, resolveBuiltinPluginsRoot } from "./index.js";
+import {
+  asarUnpackedAlternate,
+  BuiltinPluginLoader,
+  builtinPlugins,
+  resolveBuiltinPluginsRoot,
+} from "./index.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -34,6 +39,13 @@ async function fixture(root: string, id: string, client = false): Promise<string
   }
   return directory;
 }
+
+test("asar plugin roots prefer the unpacked tree", () => {
+  expect(asarUnpackedAlternate(path.join("/App", "app.asar", "node_modules", "x"))).toBe(
+    path.join("/App", "app.asar.unpacked", "node_modules", "x"),
+  );
+  expect(asarUnpackedAlternate("/tmp/plugins")).toBeNull();
+});
 
 test("listed built-ins resolve to matching manifests and compile", async () => {
   const root = resolveBuiltinPluginsRoot();

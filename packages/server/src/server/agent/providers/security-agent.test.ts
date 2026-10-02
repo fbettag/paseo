@@ -12,9 +12,10 @@ import type {
   AgentStreamEvent,
 } from "../agent-sdk-types.js";
 import { createTestLogger } from "../../../test-utils/test-logger.js";
-import type { JevRouterPorts } from "./jev-agent.js";
+import type { ChildAgentHandle, CreateChildAgentInput, JevRouterPorts } from "./jev-agent.js";
 import { SecurityAgentClient } from "./security-agent.js";
 import type { EnabledModel } from "../../jev/model-router.js";
+import { parseModelRef } from "../../security/campaign.js";
 
 const CAPABILITIES: AgentCapabilityFlags = {
   supportsStreaming: true,
@@ -107,19 +108,35 @@ const MODELS: EnabledModel[] = [
 function ports(
   blocked: ReadonlySet<string> = new Set(),
   runErrors: Readonly<Record<string, Error>> = {},
+  options: { holdWorkers?: boolean } = {},
 ): {
   ports: JevRouterPorts;
   opened: Array<{ providerId: string; model?: string; internal?: boolean }>;
+  children: Array<{
+    provider: string;
+    title: string;
+    initialPrompt: string;
+    prompts: string[];
+    finish: () => void;
+  }>;
   sessions: FakeSession[];
   resumed: Array<{ providerId: string; handle: AgentPersistenceHandle }>;
 } {
   const opened: Array<{ providerId: string; model?: string; internal?: boolean }> = [];
   const resumed: Array<{ providerId: string; handle: AgentPersistenceHandle }> = [];
   const sessions: FakeSession[] = [];
+  const children: Array<{
+    provider: string;
+    title: string;
+    initialPrompt: string;
+    prompts: string[];
+    finish: () => void;
+  }> = [];
   return {
     opened,
     resumed,
     sessions,
+    children,
     ports: {
       listCandidates: () => Promise.resolve(MODELS),
       judge: async () => null,
@@ -148,9 +165,57 @@ function ports(
           grok: [{ id: "full-access" }],
           glm: [{ id: "bypassPermissions" }],
         }),
+      createChildAgent: (input) => createFakeChild(input, children, runErrors, options.holdWorkers),
     },
   };
 }
+
+function createFakeChild(
+  input: CreateChildAgentInput,
+  children: Array<{
+    provider: string;
+    title: string;
+    initialPrompt: string;
+    prompts: string[];
+    finish: () => void;
+  }>,
+  runErrors: Readonly<Record<string, Error>>,
+  holdWorkers?: boolean,
+): Promise<ChildAgentHandle> {
+  const parsed = parseModelRef(input.provider);
+  const providerId = parsed?.providerId ?? input.provider;
+  let resolveFinish: (value: { text: string }) => void = () => undefined;
+  const finished = new Promise<{ text: string }>((resolve) => {
+    resolveFinish = resolve;
+  });
+  const record = {
+    provider: input.provider,
+    title: input.title,
+    initialPrompt: input.initialPrompt,
+    prompts: [] as string[],
+    finish: () => resolveFinish({ text: "done" }),
+  };
+  children.push(record);
+  if (!holdWorkers) {
+    queueMicrotask(() => {
+      record.finish();
+    });
+  }
+  return Promise.resolve({
+    agentId: `child-${children.length}`,
+    waitForFinish: async () => {
+      const error = runErrors[providerId];
+      if (error) throw error;
+      return finished;
+    },
+    prompt: async (text) => {
+      record.prompts.push(text);
+    },
+    interrupt: async () => undefined,
+  });
+}
+
+const PARENT_LAUNCH = { agentId: "security-parent" };
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -162,6 +227,13 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 function noticesInclude(notices: readonly string[], needle: string): boolean {
   return notices.some((line) => line.includes(needle));
+}
+
+function childReceivedFollowUp(
+  children: ReadonlyArray<{ prompts: readonly string[] }>,
+  text: string,
+): boolean {
+  return children.some((child) => child.prompts.includes(text));
 }
 
 describe("SecurityAgentClient", () => {
@@ -177,11 +249,14 @@ describe("SecurityAgentClient", () => {
   it("opens the manager and two replicas of that model when slots are empty", async () => {
     const harness = ports();
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, { usageWaitMs: 0 });
-    const session = await client.createSession({
-      provider: "security",
-      cwd: "/tmp/repo",
-      model: "grok/grok-4.6",
-    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
     const notices: string[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "notification") {
@@ -195,11 +270,13 @@ describe("SecurityAgentClient", () => {
       model: "grok-4.6",
       internal: false,
     });
-    expect(harness.opened.filter((opened) => opened.internal)).toEqual([
-      { providerId: "grok", model: "grok-4.6", internal: true },
-      { providerId: "grok", model: "grok-4.6", internal: true },
+    expect(harness.children.map((child) => child.provider)).toEqual([
+      "grok/grok-4.6",
+      "grok/grok-4.6",
     ]);
+    expect(harness.children.every((child) => child.title.includes("Security ·"))).toBe(true);
     expect(notices.some((line) => line.includes("fleet 2 workers"))).toBe(true);
+    expect(notices.some((line) => line.includes("started"))).toBe(true);
   });
 
   it("skips Orca free workers with a short notice instead of the 402 JSON", async () => {
@@ -212,11 +289,14 @@ describe("SecurityAgentClient", () => {
       usageWaitMs: 0,
       slots: [{ model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 }],
     });
-    const session = await client.createSession({
-      provider: "security",
-      cwd: "/tmp/repo",
-      model: "grok/grok-4.6",
-    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
     const notices: string[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "notification") {
@@ -238,11 +318,14 @@ describe("SecurityAgentClient", () => {
         { model: "glm/glm-5.3-flash", replicas: 1 },
       ],
     });
-    const session = await client.createSession({
-      provider: "security",
-      cwd: "/tmp/repo",
-      model: "grok/grok-4.6",
-    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
     const notices: string[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "notification") {
@@ -251,9 +334,7 @@ describe("SecurityAgentClient", () => {
     });
     await session.startTurn("scan the engagement");
     await waitFor(() => noticesInclude(notices, "out of usage"));
-    expect(
-      harness.opened.filter((opened) => opened.internal).map((opened) => opened.providerId),
-    ).toEqual(["grok"]);
+    expect(harness.children.map((child) => child.provider)).toEqual(["grok/grok-4.6"]);
     expect(notices.some((line) => line.includes("glm/glm-5.3-flash #1 skipped"))).toBe(true);
   });
 
@@ -279,12 +360,15 @@ describe("SecurityAgentClient", () => {
       }),
     ]);
 
-    const session = await client.createSession({
-      provider: "security",
-      cwd: "/tmp/repo",
-      model: "grok/grok-4.6",
-      featureValues: { slots: [{ model: "grok/grok-4.6", replicas: 1 }] },
-    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+        featureValues: { slots: [{ model: "grok/grok-4.6", replicas: 1 }] },
+      },
+      PARENT_LAUNCH,
+    );
     const notices: string[] = [];
     session.subscribe((event) => {
       if (event.type === "timeline" && event.item.type === "notification") {
@@ -293,9 +377,7 @@ describe("SecurityAgentClient", () => {
     });
     await session.startTurn("scan the engagement");
     await waitFor(() => noticesInclude(notices, "completed"));
-    expect(harness.opened.filter((opened) => opened.internal)).toEqual([
-      { providerId: "grok", model: "grok-4.6", internal: true },
-    ]);
+    expect(harness.children.map((child) => child.provider)).toEqual(["grok/grok-4.6"]);
   });
 
   it("applies setFeature slots before the fleet starts", async () => {
@@ -303,11 +385,14 @@ describe("SecurityAgentClient", () => {
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
       usageWaitMs: 0,
     });
-    const session = await client.createSession({
-      provider: "security",
-      cwd: "/tmp/repo",
-      model: "grok/grok-4.6",
-    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
     if (!session.setFeature) {
       throw new Error("Security session is missing setFeature");
     }
@@ -320,9 +405,9 @@ describe("SecurityAgentClient", () => {
     });
     await session.startTurn("scan the engagement");
     await waitFor(() => noticesInclude(notices, "completed"));
-    expect(harness.opened.filter((opened) => opened.internal)).toEqual([
-      { providerId: "glm", model: "glm-5.3-flash", internal: true },
-      { providerId: "glm", model: "glm-5.3-flash", internal: true },
+    expect(harness.children.map((child) => child.provider)).toEqual([
+      "glm/glm-5.3-flash",
+      "glm/glm-5.3-flash",
     ]);
     const slotsFeature = session.features?.[0];
     expect(slotsFeature?.type).toBe("slots");
@@ -365,5 +450,31 @@ describe("SecurityAgentClient", () => {
       },
     ]);
     expect(harness.opened).toEqual([]);
+  });
+
+  it("forwards a later user turn to live workers", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, { usageWaitMs: 0 });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 2);
+    await session.startTurn("continue with a 2nd account");
+    await waitFor(() => childReceivedFollowUp(harness.children, "continue with a 2nd account"));
+    expect(notices.some((line) => line.includes("forwarding follow-up"))).toBe(true);
+    for (const child of harness.children) child.finish();
+    await waitFor(() => noticesInclude(notices, "completed"));
   });
 });
