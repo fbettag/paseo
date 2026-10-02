@@ -58,6 +58,7 @@ import {
 import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
 import { JEV_PROVIDER_ID, type JevRouterPorts } from "./providers/jev-agent.js";
+import { SECURITY_PROVIDER_ID, isWrapperProvider } from "./providers/security-agent.js";
 import type { EnabledModel, RouteJudgment } from "../jev/model-router.js";
 import type { ProviderUsage } from "@getpaseo/protocol/messages";
 import { blockedProviderIds } from "../jev/usage-block.js";
@@ -492,10 +493,11 @@ export class ProviderSnapshotManager {
   }
 
   private async listJevCandidates(cwd?: string): Promise<EnabledModel[]> {
-    const entries = await this.listProviders({ cwd, wait: true });
+    const innerIds = this.getProviderIds().filter((id) => !isWrapperProvider(id));
+    const entries = await this.listProviders({ cwd, wait: true, providers: innerIds });
     const candidates: EnabledModel[] = [];
     for (const entry of entries) {
-      if (entry.provider === JEV_PROVIDER_ID || !entry.enabled || entry.status !== "ready") {
+      if (isWrapperProvider(entry.provider) || !entry.enabled || entry.status !== "ready") {
         continue;
       }
       for (const model of filterSelectableAgentModels(entry.models)) {
@@ -544,6 +546,9 @@ export class ProviderSnapshotManager {
     if (providerId === JEV_PROVIDER_ID) {
       throw new Error("Jev cannot route to itself");
     }
+    if (providerId === SECURITY_PROVIDER_ID) {
+      throw new Error("Cannot open Security as an inner session");
+    }
     const definition = this.generation.definitions[providerId];
     if (!definition?.enabled) {
       throw new Error(`Provider '${providerId}' is not available for Jev routing`);
@@ -561,7 +566,7 @@ export class ProviderSnapshotManager {
     const entries = await this.listProviders({ cwd, wait: false });
     const modes: Record<string, { id: string }[]> = {};
     for (const entry of entries) {
-      if (entry.provider === JEV_PROVIDER_ID || !entry.enabled) continue;
+      if (isWrapperProvider(entry.provider) || !entry.enabled) continue;
       modes[entry.provider] = (entry.modes ?? []).map((mode) => ({ id: mode.id }));
     }
     return modes;

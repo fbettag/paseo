@@ -181,6 +181,7 @@ const BUILTIN_PROVIDER_IDS = [
   "pi",
   "omp",
   "jev",
+  "security",
 ] as const;
 
 function isLegacyProviderEntry(value: unknown): boolean {

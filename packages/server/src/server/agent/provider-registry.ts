@@ -55,6 +55,11 @@ import {
   JEV_PROVIDER_ID,
   type JevRouterPorts,
 } from "./providers/jev-agent.js";
+import {
+  SecurityAgentClient,
+  SECURITY_ICON_SVG,
+  SECURITY_PROVIDER_ID,
+} from "./providers/security-agent.js";
 import { ClaudeProviderOptionsSchema } from "./providers/claude/options.js";
 import { CodexProviderOptionsSchema } from "./providers/codex/options.js";
 import { OpenCodeProviderOptionsSchema } from "./providers/opencode/options.js";
@@ -253,6 +258,13 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
   mock: (logger) => new MockLoadTestAgentClient(logger),
   "mock-slow": () => new MockSlowProviderClient(),
   jev: (logger, _runtimeSettings, options) => new JevAgentClient(logger, options?.jevPorts),
+  security: (logger, _runtimeSettings, options) =>
+    new SecurityAgentClient(logger, options?.jevPorts, options?.providerParams),
+};
+
+const PROVIDER_ICON_SVGS: Record<string, string> = {
+  [JEV_PROVIDER_ID]: JEV_ICON_SVG,
+  [SECURITY_PROVIDER_ID]: SECURITY_ICON_SVG,
 };
 
 function getCursorACPCommand(
@@ -644,7 +656,7 @@ function createRegistryEntry(
   const { createBaseClient: _createBaseClient, contract: _contract, ...configuration } = resolved;
   return {
     ...resolved.definition,
-    ...(provider === JEV_PROVIDER_ID ? { iconSvg: JEV_ICON_SVG } : {}),
+    ...(PROVIDER_ICON_SVGS[provider] ? { iconSvg: PROVIDER_ICON_SVGS[provider] } : {}),
     configuration,
     enabled: resolved.enabled,
     derivedFromProviderId: resolved.derivedFromProviderId,

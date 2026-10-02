@@ -29,6 +29,7 @@ Your code never leaves your machine. Paseo is local-first.
 │  Agent    │ │ Agent  │ │   Agent    │ │  Agent   │ │ Agent   │
 │  SDK      │ │ Server │ │    ACP     │ │          │ │         │
 └───────────┘ └────────┘ └────────────┘ └──────────┘ └─────────┘
+         Jev and Security wrap those inner sessions (no own API)
 ```
 
 ## Components at a glance

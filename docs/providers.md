@@ -89,6 +89,8 @@ Implement the `AgentClient` and `AgentSession` interfaces from `agent-sdk-types.
 
 Core direct providers: `claude` (in `providers/claude/agent.ts`), `codex` (`codex-app-server-agent.ts`), `opencode` (`opencode/runtime-client.ts`), `pi` (`providers/pi/agent.ts`), and `omp` (`providers/omp/agent.ts`). The dev-only `mock` provider (`mock-load-test-agent.ts`) is also direct.
 
+Jev (`providers/jev-agent.ts`) and Security (`providers/security-agent.ts`) are core wrapper adapters: they have no vendor API of their own. Both open inner sessions through `JevRouterPorts` so daemon-owned compact, tool admission, and usage gates apply. Jev routes each turn to one enabled model. Security is disabled by default; it pins a manager model and runs a bypass worker fleet from `agents.providers.security.params.slots` (replica counts, max parallel, usage wait). Do not add them as Muse-style plugins: plugins lack those ports.
+
 Claude first-party model metadata lives in `packages/server/src/server/agent/providers/claude/model-manifest.ts`. When adding or updating a Claude model, update that manifest only; the model picker thinking options and Claude-specific feature gates are derived from the manifest. Do not add model-specific Claude capability lists in feature code.
 
 Paseo tools are not implemented as MCP tools internally. They live in a shared tool catalog under `packages/server/src/server/agent/tools/`; MCP is only the fallback adapter. The daemon resolves `agents.providers.<provider>.paseoTools` by the exact provider ID. The catalog policy belongs to the caller: it filters the tools exposed to the current agent. When that agent calls `create_agent`, the child receives the policy for the child provider ID; the caller's policy is not inherited.
@@ -441,7 +443,7 @@ case "my-provider":
   );
 ```
 
-Add to the `allProviders` array (current built-ins are `claude`, `codex`, `copilot`, `opencode`, `pi`, `omp`):
+Add to the `allProviders` array (current built-ins are `claude`, `codex`, `copilot`, `opencode`, `pi`, `omp`, `jev`, `security`):
 
 ```ts
 export const allProviders: AgentProvider[] = [

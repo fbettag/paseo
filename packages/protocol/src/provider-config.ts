@@ -71,6 +71,7 @@ const BUILTIN_PROVIDER_IDS = [
   "pi",
   "omp",
   "jev",
+  "security",
 ] as const;
 const PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]*$/;
 
