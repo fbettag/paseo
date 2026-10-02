@@ -215,6 +215,16 @@ export const ar: TranslationResources = {
       on: "على",
       off: "عن",
     },
+    slots: {
+      search: "البحث عن النماذج...",
+      clearSearch: "مسح البحث",
+      empty: "٢× المدير",
+      workers: "{{count}} عمال",
+      increase: "زيادة النسخ",
+      decrease: "تقليل النسخ",
+      emptyHint: "القائمة الفارغة تستخدم نسختين من نموذج المدير.",
+      noMatches: "لا توجد نماذج مطابقة لبحثك.",
+    },
     mode: {
       title: "وضع",
       searchPlaceholder: "أوضاع البحث...",

@@ -217,6 +217,16 @@ export const ru: TranslationResources = {
       on: "Включено",
       off: "Выключено",
     },
+    slots: {
+      search: "Поиск моделей...",
+      clearSearch: "Очистить поиск",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "Увеличить реплики",
+      decrease: "Уменьшить реплики",
+      emptyHint: "Пустой список использует две копии модели менеджера.",
+      noMatches: "Нет моделей по этому запросу.",
+    },
     mode: {
       title: "Режим",
       searchPlaceholder: "Поиск режимов...",

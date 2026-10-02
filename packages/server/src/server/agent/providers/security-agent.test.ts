@@ -220,6 +220,81 @@ describe("SecurityAgentClient", () => {
     expect(notices.some((line) => line.includes("glm/glm-5.3-flash #1 skipped"))).toBe(true);
   });
 
+  it("lists slots as a composer feature and honors session featureValues", async () => {
+    const harness = ports();
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      usageWaitMs: 0,
+      slots: [{ model: "glm/glm-5.3-flash", replicas: 4 }],
+    });
+    const listed = await client.listFeatures({
+      provider: "security",
+      cwd: "/tmp/repo",
+    });
+    expect(listed).toEqual([
+      expect.objectContaining({
+        type: "slots",
+        id: "slots",
+        value: [{ model: "glm/glm-5.3-flash", replicas: 4 }],
+        options: [
+          { id: "grok/grok-4.6", label: "Grok · Grok 4.6" },
+          { id: "glm/glm-5.3-flash", label: "GLM · GLM Flash" },
+        ],
+      }),
+    ]);
+
+    const session = await client.createSession({
+      provider: "security",
+      cwd: "/tmp/repo",
+      model: "grok/grok-4.6",
+      featureValues: { slots: [{ model: "grok/grok-4.6", replicas: 1 }] },
+    });
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => noticesInclude(notices, "completed"));
+    expect(harness.opened.filter((opened) => opened.internal)).toEqual([
+      { providerId: "grok", model: "grok-4.6", internal: true },
+    ]);
+  });
+
+  it("applies setFeature slots before the fleet starts", async () => {
+    const harness = ports();
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      usageWaitMs: 0,
+    });
+    const session = await client.createSession({
+      provider: "security",
+      cwd: "/tmp/repo",
+      model: "grok/grok-4.6",
+    });
+    if (!session.setFeature) {
+      throw new Error("Security session is missing setFeature");
+    }
+    await session.setFeature("slots", [{ model: "glm/glm-5.3-flash", replicas: 2 }]);
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => noticesInclude(notices, "completed"));
+    expect(harness.opened.filter((opened) => opened.internal)).toEqual([
+      { providerId: "glm", model: "glm-5.3-flash", internal: true },
+      { providerId: "glm", model: "glm-5.3-flash", internal: true },
+    ]);
+    const slotsFeature = session.features?.[0];
+    expect(slotsFeature?.type).toBe("slots");
+    if (slotsFeature?.type !== "slots") {
+      throw new Error("Expected slots feature");
+    }
+    expect(slotsFeature.value).toEqual([{ model: "glm/glm-5.3-flash", replicas: 2 }]);
+  });
+
   it("resumes the manager and does not restart workers", async () => {
     const harness = ports();
     const client = new SecurityAgentClient(createTestLogger(), harness.ports);

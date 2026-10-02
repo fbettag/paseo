@@ -216,6 +216,16 @@ export const ptBR: TranslationResources = {
       on: "Ativado",
       off: "Desativado",
     },
+    slots: {
+      search: "Buscar modelos...",
+      clearSearch: "Limpar busca",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "Aumentar réplicas",
+      decrease: "Diminuir réplicas",
+      emptyHint: "Vazio usa duas cópias do modelo manager.",
+      noMatches: "Nenhum modelo corresponde à busca.",
+    },
     mode: {
       title: "Modo",
       searchPlaceholder: "Buscar modos...",

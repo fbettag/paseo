@@ -76,11 +76,13 @@ import {
   resolveComposerToolbarGlyphSize,
   type ComposerControlDensity,
   type ComposerControlPresentation,
+  type ComposerFeatureControlPresence,
 } from "@/composer/agent-controls/layout";
 import { ComposerControlLayoutProvider } from "@/composer/agent-controls/layout-context";
 import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { CompactModelSheet } from "@/composer/agent-controls/model-sheet";
+import { SlotsFeatureItem } from "@/composer/agent-controls/slots-feature";
 import {
   useAgentProfileEditor,
   useAgentProfilePicker,
@@ -237,6 +239,20 @@ function getFeatureIconColor(
 }
 
 type ActiveSheet = "thinking" | "features" | null;
+
+function featureControlPresence(feature: AgentFeature): ComposerFeatureControlPresence {
+  if (feature.type === "toggle") {
+    return { type: "toggle" };
+  }
+  if (feature.type === "slots") {
+    return { type: "slots", label: feature.label };
+  }
+  const selectedOption = feature.options.find((option) => option.id === feature.value);
+  return {
+    type: "select",
+    label: selectedOption?.label ?? feature.label,
+  };
+}
 
 function resolveHasAnyControl({
   providerOptions,
@@ -547,18 +563,7 @@ function ControlledAgentControls({
     features,
     hasMode: modeControl !== null && modeControl !== undefined,
   });
-  const featureControls = useMemo(
-    () =>
-      (features ?? []).map((feature) => {
-        if (feature.type === "toggle") return { type: "toggle" as const };
-        const selectedOption = feature.options.find((option) => option.id === feature.value);
-        return {
-          type: "select" as const,
-          label: selectedOption?.label ?? feature.label,
-        };
-      }),
-    [features],
-  );
+  const featureControls = useMemo(() => (features ?? []).map(featureControlPresence), [features]);
   const controlPresence = useMemo(
     () => ({
       hasModel: canSelectModel,
@@ -1325,6 +1330,19 @@ function DesktopFeatureItem({
     [feature],
   );
 
+  if (feature.type === "slots") {
+    return (
+      <SlotsFeatureItem
+        feature={feature}
+        disabled={disabled}
+        open={openSelector === featureSelector}
+        onOpenChange={handleFeatureOpenChange}
+        onSetFeature={onSetFeature}
+        surface="toolbar"
+      />
+    );
+  }
+
   if (feature.type === "toggle") {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     return (
@@ -1442,6 +1460,19 @@ function SheetFeatureItem({
       { id: "false", label: t("agentControls.features.off") },
     ];
   }, [feature, t]);
+
+  if (feature.type === "slots") {
+    return (
+      <SlotsFeatureItem
+        feature={feature}
+        disabled={disabled}
+        open={openSelector === featureSelector}
+        onOpenChange={handleFeatureOpenChange}
+        onSetFeature={onSetFeature}
+        surface="sheet"
+      />
+    );
+  }
 
   if (feature.type === "toggle") {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);

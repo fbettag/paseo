@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_MAX_PARALLEL, parseSecurityParams } from "./settings.js";
+import {
+  DEFAULT_MAX_PARALLEL,
+  parseSecurityParams,
+  parseSlotsFeatureValue,
+  resolveSessionSlots,
+  SECURITY_SLOTS_FEATURE_ID,
+} from "./settings.js";
 
 describe("parseSecurityParams", () => {
   it("fills defaults when params are missing", () => {
@@ -32,5 +38,28 @@ describe("parseSecurityParams", () => {
   it("falls back when the object is not a params record", () => {
     expect(parseSecurityParams("nope").slots).toEqual([]);
     expect(parseSecurityParams({ replicas: 99 }).slots).toEqual([]);
+  });
+});
+
+describe("resolveSessionSlots", () => {
+  it("uses provider params when the session has no slots feature", () => {
+    expect(resolveSessionSlots(undefined, [{ model: "grok/grok-4.6", replicas: 2 }])).toEqual([
+      { model: "grok/grok-4.6", replicas: 2 },
+    ]);
+  });
+
+  it("prefers an explicit empty feature value over provider params", () => {
+    expect(
+      resolveSessionSlots({ [SECURITY_SLOTS_FEATURE_ID]: [] }, [
+        { model: "grok/grok-4.6", replicas: 2 },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("parses slot arrays and rejects junk", () => {
+    expect(parseSlotsFeatureValue([{ model: "glm/glm-5.3-flash", replicas: 4 }])).toEqual([
+      { model: "glm/glm-5.3-flash", replicas: 4 },
+    ]);
+    expect(parseSlotsFeatureValue("nope")).toEqual([]);
   });
 });

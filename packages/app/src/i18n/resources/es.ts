@@ -217,6 +217,16 @@ export const es: TranslationResources = {
       on: "En",
       off: "Apagado",
     },
+    slots: {
+      search: "Buscar modelos...",
+      clearSearch: "Borrar búsqueda",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "Aumentar réplicas",
+      decrease: "Reducir réplicas",
+      emptyHint: "Vacío usa dos copias del modelo manager.",
+      noMatches: "Ningún modelo coincide con la búsqueda.",
+    },
     mode: {
       title: "Modo",
       searchPlaceholder: "Modos de búsqueda...",

@@ -37,6 +37,7 @@ const MODE_ICONS: Record<string, AgentControlIcon> = {
 };
 
 const FEATURE_ICONS: Record<string, AgentControlIcon> = {
+  bot: Bot,
   "list-todo": ListTodo,
   "shield-check": ShieldCheck,
   zap: Zap,

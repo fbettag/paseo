@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import type {
   AgentCapabilityFlags,
   AgentCreateSessionOptions,
+  AgentFeature,
   AgentLaunchContext,
   AgentMode,
   AgentModelDefinition,
@@ -14,6 +15,7 @@ import type {
   AgentResumeSessionOptions,
   AgentRunOptions,
   AgentRunResult,
+  AgentSelectOption,
   AgentSession,
   AgentSessionConfig,
   AgentSlashCommand,
@@ -41,7 +43,14 @@ import {
   type ModelRef,
 } from "../../security/campaign.js";
 import { listFindingFiles } from "../../security/findings.js";
-import { parseSecurityParams, type ResolvedSecurityParams } from "../../security/settings.js";
+import {
+  parseSecurityParams,
+  parseSlotsFeatureValue,
+  resolveSessionSlots,
+  SECURITY_SLOTS_FEATURE_ID,
+  type ResolvedSecurityParams,
+  type SecuritySlot,
+} from "../../security/settings.js";
 
 export const SECURITY_PROVIDER_ID = "security";
 
@@ -131,20 +140,26 @@ export class SecurityAgentClient {
     };
   }
 
-  createSession(
+  async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
+    const candidates = await this.readCandidates(config.cwd);
+    const slots = resolveSessionSlots(config.featureValues, this.params.slots);
+    return [buildSlotsFeature(slots, slotOptions(candidates))];
+  }
+
+  async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
     options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
-    return Promise.resolve(
-      new SecurityAgentSession(
-        this.logger,
-        this.ports,
-        this.params,
-        config,
-        launchContext,
-        options,
-      ),
+    const candidates = await this.readCandidates(config.cwd);
+    return new SecurityAgentSession(
+      this.logger,
+      this.ports,
+      this.params,
+      config,
+      slotOptions(candidates),
+      launchContext,
+      options,
     );
   }
 
@@ -168,6 +183,12 @@ export class SecurityAgentClient {
       launchContext,
       options,
     );
+    const candidates = await this.readCandidates(cwd);
+    const resumedSlots = routed.slots ?? this.params.slots;
+    const resumedFeatureValues = {
+      ...overrides?.featureValues,
+      [SECURITY_SLOTS_FEATURE_ID]: resumedSlots,
+    };
     const session = new SecurityAgentSession(
       this.logger,
       ports,
@@ -177,7 +198,9 @@ export class SecurityAgentClient {
         provider: SECURITY_PROVIDER_ID,
         cwd,
         model: modelRefKey(routed.manager),
+        featureValues: resumedFeatureValues,
       },
+      slotOptions(candidates),
       launchContext,
     );
     session.useProviderModes(providerModes);
@@ -212,15 +235,23 @@ class SecurityAgentSession implements AgentSession {
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly workers = new Set<AgentSession>();
   private readonly abort = new AbortController();
+  private slots: SecuritySlot[];
 
   constructor(
     private readonly logger: Logger,
     private readonly ports: JevRouterPorts | undefined,
     private readonly params: ResolvedSecurityParams,
     private readonly config: AgentSessionConfig,
+    private readonly slotChoices: readonly AgentSelectOption[],
     private readonly launchContext?: AgentLaunchContext,
     private readonly createOptions?: AgentCreateSessionOptions,
-  ) {}
+  ) {
+    this.slots = resolveSessionSlots(config.featureValues, params.slots);
+  }
+
+  get features(): AgentFeature[] {
+    return [buildSlotsFeature(this.slots, this.slotChoices)];
+  }
 
   get id(): string | null {
     return this.inner?.id ?? null;
@@ -305,6 +336,17 @@ class SecurityAgentSession implements AgentSession {
     return "bypass";
   }
 
+  async setFeature(featureId: string, value: unknown): Promise<void> {
+    if (featureId !== SECURITY_SLOTS_FEATURE_ID) {
+      throw new Error(`Unknown Security feature '${featureId}'`);
+    }
+    this.slots = resolveSessionSlots({ [SECURITY_SLOTS_FEATURE_ID]: value }, []);
+    this.config.featureValues = {
+      ...this.config.featureValues,
+      [SECURITY_SLOTS_FEATURE_ID]: this.slots,
+    };
+  }
+
   async setMode(modeId: string): Promise<void> {
     if (modeId !== "bypass") {
       throw new Error(`Unknown Security mode '${modeId}'`);
@@ -345,6 +387,7 @@ class SecurityAgentSession implements AgentSession {
         managerLabel: manager.label,
         providerLabel: manager.providerLabel,
         campaignComplete: this.campaignComplete,
+        slots: this.slots,
         inner,
       },
     };
@@ -445,7 +488,7 @@ class SecurityAgentSession implements AgentSession {
   private async runFleet(goal: string): Promise<CampaignReport[]> {
     const ports = this.requirePorts();
     const manager = this.manager;
-    const items = expandSlots(this.params.slots, manager);
+    const items = expandSlots(this.slots, manager);
     this.emitNoticeText(
       `Security · fleet ${items.length} workers, max ${this.params.maxParallel} in parallel`,
     );
@@ -454,7 +497,7 @@ class SecurityAgentSession implements AgentSession {
       return [];
     }
     const reports = await runCampaign({
-      slots: this.params.slots,
+      slots: this.slots,
       fallback: manager,
       maxParallel: this.params.maxParallel,
       usageWaitMs: this.params.usageWaitMs,
@@ -581,6 +624,38 @@ class SecurityAgentSession implements AgentSession {
     }
     return this.ports;
   }
+}
+
+function slotOptions(candidates: readonly EnabledModel[]): AgentSelectOption[] {
+  return candidates.map((candidate) => {
+    const option: AgentSelectOption = {
+      id: modelRefKey(candidate),
+      label: `${candidate.providerLabel} · ${candidate.label}`,
+    };
+    if (candidate.description) {
+      option.description = candidate.description;
+    }
+    return option;
+  });
+}
+
+function buildSlotsFeature(
+  value: readonly SecuritySlot[],
+  options: readonly AgentSelectOption[],
+): AgentFeature {
+  return {
+    type: "slots",
+    id: SECURITY_SLOTS_FEATURE_ID,
+    label: "Subagent models",
+    description: "Worker fleet for this campaign. Empty uses two copies of the manager model.",
+    tooltip: "Choose subagent models and replica counts",
+    icon: "bot",
+    desktopTrigger: "label",
+    value: [...value],
+    options: [...options],
+    minReplicas: 1,
+    maxReplicas: 8,
+  };
 }
 
 function resolveManager(
@@ -751,6 +826,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
   handle: AgentPersistenceHandle;
   manager: ModelRef & { label: string; providerLabel: string };
   campaignComplete: boolean;
+  slots: SecuritySlot[] | null;
 } | null {
   if (!metadata) return null;
   const providerId = metadata.managerProvider;
@@ -776,6 +852,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
         typeof metadata.providerLabel === "string" ? metadata.providerLabel : providerId,
     },
     campaignComplete: metadata.campaignComplete === true,
+    slots: Array.isArray(metadata.slots) ? parseSlotsFeatureValue(metadata.slots) : null,
   };
 }
 

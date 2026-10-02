@@ -217,6 +217,16 @@ export const ja: TranslationResources = {
       on: "オン",
       off: "オフ",
     },
+    slots: {
+      search: "モデルを検索...",
+      clearSearch: "検索をクリア",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "レプリカを増やす",
+      decrease: "レプリカを減らす",
+      emptyHint: "空の場合はマネージャーモデルを2つ使います。",
+      noMatches: "一致するモデルがありません。",
+    },
     mode: {
       title: "モード",
       searchPlaceholder: "モードを検索...",

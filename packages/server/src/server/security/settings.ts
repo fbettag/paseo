@@ -26,6 +26,8 @@ export interface ResolvedSecurityParams {
   usagePollMs: number;
 }
 
+export const SECURITY_SLOTS_FEATURE_ID = "slots";
+
 export function parseSecurityParams(value: unknown): ResolvedSecurityParams {
   const parsed = SecurityProviderParamsSchema.safeParse(value ?? {});
   if (!parsed.success) {
@@ -42,4 +44,23 @@ export function parseSecurityParams(value: unknown): ResolvedSecurityParams {
     usageWaitMs: parsed.data.usageWaitMs ?? DEFAULT_USAGE_WAIT_MS,
     usagePollMs: parsed.data.usagePollMs ?? DEFAULT_USAGE_POLL_MS,
   };
+}
+
+export function parseSlotsFeatureValue(value: unknown): SecuritySlot[] {
+  const parsed = z.array(SecuritySlotSchema).safeParse(value);
+  if (!parsed.success) return [];
+  return parsed.data;
+}
+
+export function resolveSessionSlots(
+  featureValues: Record<string, unknown> | undefined,
+  fallback: readonly SecuritySlot[],
+): SecuritySlot[] {
+  if (
+    !featureValues ||
+    !Object.prototype.hasOwnProperty.call(featureValues, SECURITY_SLOTS_FEATURE_ID)
+  ) {
+    return [...fallback];
+  }
+  return parseSlotsFeatureValue(featureValues[SECURITY_SLOTS_FEATURE_ID]);
 }

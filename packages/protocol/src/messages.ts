@@ -319,9 +319,29 @@ export const AgentFeatureSelectSchema = z.object({
   options: z.array(AgentSelectOptionSchema),
 });
 
+export const AgentFeatureSlotValueSchema = z.object({
+  model: z.string().min(1),
+  replicas: z.number().int().min(1).max(8),
+});
+
+export const AgentFeatureSlotsSchema = z.object({
+  type: z.literal("slots"),
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  tooltip: z.string().optional(),
+  icon: z.string().optional(),
+  desktopTrigger: z.enum(["icon", "label"]).optional(),
+  value: z.array(AgentFeatureSlotValueSchema),
+  options: z.array(AgentSelectOptionSchema),
+  minReplicas: z.number().int().min(1).max(8),
+  maxReplicas: z.number().int().min(1).max(8),
+});
+
 export const AgentFeatureSchema = z.discriminatedUnion("type", [
   AgentFeatureToggleSchema,
   AgentFeatureSelectSchema,
+  AgentFeatureSlotsSchema,
 ]);
 
 const AgentModelDefinitionSchema = z.object({

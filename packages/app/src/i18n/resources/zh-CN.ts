@@ -215,6 +215,16 @@ export const zhCN: TranslationResources = {
       on: "开启",
       off: "关闭",
     },
+    slots: {
+      search: "搜索模型...",
+      clearSearch: "清除搜索",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "增加副本",
+      decrease: "减少副本",
+      emptyHint: "为空时使用两份 manager 模型。",
+      noMatches: "没有匹配的模型。",
+    },
     mode: {
       title: "Mode",
       searchPlaceholder: "搜索 modes...",

@@ -1,6 +1,7 @@
 import type {
   AgentFeature,
   AgentFeatureSelect,
+  AgentFeatureSlots,
   AgentFeatureToggle,
   AgentProviderNotice,
   AgentTaskItem,
@@ -14,6 +15,7 @@ import type { PaseoToolCatalog } from "./tools/types.js";
 export type {
   AgentFeature,
   AgentFeatureSelect,
+  AgentFeatureSlots,
   AgentFeatureToggle,
   AgentProviderNotice,
   AgentTaskItem,

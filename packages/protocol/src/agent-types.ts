@@ -151,7 +151,26 @@ export interface AgentFeatureSelect {
   options: AgentSelectOption[];
 }
 
-export type AgentFeature = AgentFeatureToggle | AgentFeatureSelect;
+export interface AgentFeatureSlotValue {
+  model: string;
+  replicas: number;
+}
+
+export interface AgentFeatureSlots {
+  type: "slots";
+  id: string;
+  label: string;
+  description?: string;
+  tooltip?: string;
+  icon?: string;
+  desktopTrigger?: "icon" | "label";
+  value: AgentFeatureSlotValue[];
+  options: AgentSelectOption[];
+  minReplicas: number;
+  maxReplicas: number;
+}
+
+export type AgentFeature = AgentFeatureToggle | AgentFeatureSelect | AgentFeatureSlots;
 
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;

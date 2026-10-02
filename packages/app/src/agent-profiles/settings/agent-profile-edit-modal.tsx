@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 import { Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
-import type { AgentFeature } from "@getpaseo/protocol/agent-types";
+import type { AgentFeature, AgentFeatureSlotValue } from "@getpaseo/protocol/agent-types";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 import { AdaptiveModalSheet, type SheetHeader } from "@/components/adaptive-modal-sheet";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   type SelectFieldOption,
 } from "@/components/ui/select-field";
 import { Switch } from "@/components/ui/switch";
+import { SlotsFeaturePanel } from "@/composer/agent-controls/slots-feature";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { toErrorMessage } from "@/utils/error-messages";
 import { AgentProfileAppearanceField } from "./agent-profile-appearance-field";
@@ -425,6 +426,10 @@ function AgentProfileFeatureRow({
     (value: string) => model.setFeatureValue(feature.id, value),
     [feature.id, model],
   );
+  const handleSlots = useCallback(
+    (value: AgentFeatureSlotValue[]) => model.setFeatureValue(feature.id, value),
+    [feature.id, model],
+  );
   const selectOptions = useMemo<SelectFieldOption<string>[]>(
     () =>
       feature.type === "select"
@@ -445,6 +450,17 @@ function AgentProfileFeatureRow({
     const option = feature.options.find((candidate) => candidate.id === feature.value);
     return { label: option?.label ?? feature.value };
   }, [feature]);
+
+  if (feature.type === "slots") {
+    return (
+      <View
+        style={[rowStyle, styles.featureSlotsRow]}
+        testID={`agent-profile-feature-row-${feature.id}`}
+      >
+        <SlotsFeaturePanel feature={feature} disabled={disabled} onChange={handleSlots} />
+      </View>
+    );
+  }
 
   if (feature.type === "select") {
     return (
@@ -521,6 +537,10 @@ const styles = StyleSheet.create((theme) => ({
     justifyContent: "space-between",
     gap: theme.spacing[3],
     paddingVertical: theme.spacing[3],
+  },
+  featureSlotsRow: {
+    flexDirection: "column",
+    alignItems: "stretch",
   },
   featureRowBorder: {
     borderTopWidth: 1,

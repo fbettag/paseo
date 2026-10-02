@@ -96,7 +96,7 @@ Each agent is stored as a separate JSON file, grouped by project directory.
 | `lastModeId`         | `string?`                                | Last active mode ID                                                                                                                                                                                                                                                                                                                                                                 |
 | `config`             | `SerializableConfig?`                    | Agent session configuration (see below)                                                                                                                                                                                                                                                                                                                                             |
 | `runtimeInfo`        | `RuntimeInfo?`                           | Live runtime state (see below)                                                                                                                                                                                                                                                                                                                                                      |
-| `features`           | `AgentFeature[]?`                        | Provider-reported features (toggles/selects)                                                                                                                                                                                                                                                                                                                                        |
+| `features`           | `AgentFeature[]?`                        | Provider-reported features (toggles/selects/slots)                                                                                                                                                                                                                                                                                                                                  |
 | `persistence`        | `PersistenceHandle?`                     | Handle for resuming sessions                                                                                                                                                                                                                                                                                                                                                        |
 | `lastError`          | `string?` (nullable)                     | Last error message, if any                                                                                                                                                                                                                                                                                                                                                          |
 | `requiresAttention`  | `boolean?`                               | Whether the agent needs user attention                                                                                                                                                                                                                                                                                                                                              |
@@ -164,6 +164,21 @@ Each agent is stored as a separate JSON file, grouped by project directory.
 | `icon`        | `string?`             |
 | `value`       | `string \| null`      |
 | `options`     | `AgentSelectOption[]` |
+
+**Slots:**
+
+| Field         | Type                                    |
+| ------------- | --------------------------------------- |
+| `type`        | `"slots"`                               |
+| `id`          | `string`                                |
+| `label`       | `string`                                |
+| `description` | `string?`                               |
+| `tooltip`     | `string?`                               |
+| `icon`        | `string?`                               |
+| `value`       | `{ model: string, replicas: number }[]` |
+| `options`     | `AgentSelectOption[]`                   |
+| `minReplicas` | `number` (1–8)                          |
+| `maxReplicas` | `number` (1–8)                          |
 
 ---
 

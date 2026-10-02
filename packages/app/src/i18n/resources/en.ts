@@ -211,6 +211,16 @@ export const en = {
       on: "On",
       off: "Off",
     },
+    slots: {
+      search: "Search models...",
+      clearSearch: "Clear search",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "Increase replicas",
+      decrease: "Decrease replicas",
+      emptyHint: "Empty uses two copies of the manager model.",
+      noMatches: "No models match your search.",
+    },
     mode: {
       title: "Mode",
       searchPlaceholder: "Search modes...",

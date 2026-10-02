@@ -215,6 +215,16 @@ export const ko: TranslationResources = {
       on: "켜짐",
       off: "꺼짐",
     },
+    slots: {
+      search: "모델 검색...",
+      clearSearch: "검색 지우기",
+      empty: "2× manager",
+      workers: "{{count}} workers",
+      increase: "복제본 늘리기",
+      decrease: "복제본 줄이기",
+      emptyHint: "비어 있으면 매니저 모델을 두 개 사용합니다.",
+      noMatches: "검색과 일치하는 모델이 없습니다.",
+    },
     mode: {
       title: "모드",
       searchPlaceholder: "모드 검색...",
