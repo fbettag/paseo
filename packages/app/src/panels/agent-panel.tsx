@@ -1164,11 +1164,12 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     rows: subagentRows,
   });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
-  const campaign = useSessionStore((state) =>
-    parseCampaignSnapshot(
-      state.sessions[serverId]?.agents.get(agentId)?.runtimeInfo?.extra?.campaign,
-    ),
+  // parseCampaignSnapshot allocates. Doing that inside the store selector makes
+  // useSyncExternalStore see a new snapshot every read and loop (React #185).
+  const campaignExtra = useSessionStore(
+    (state) => state.sessions[serverId]?.agents.get(agentId)?.runtimeInfo?.extra?.campaign,
   );
+  const campaign = useMemo(() => parseCampaignSnapshot(campaignExtra), [campaignExtra]);
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const hasVisibleAgentTracks = hasAgentTracks({
     subagentRows,
