@@ -1,7 +1,14 @@
 import { z } from "zod";
 import type { AgentProvider } from "@getpaseo/protocol/agent-types";
+import { AgentFeatureSlotValueSchema } from "@getpaseo/protocol/messages";
 
-const featureValuesSchema = z.record(z.string(), z.union([z.boolean(), z.string(), z.null()]));
+const featureValueSchema = z.union([
+  z.boolean(),
+  z.string(),
+  z.null(),
+  z.array(AgentFeatureSlotValueSchema),
+]);
+const featureValuesSchema = z.record(z.string(), featureValueSchema);
 
 export interface ProviderPreferences {
   model?: string;

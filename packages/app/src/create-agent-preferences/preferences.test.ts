@@ -69,6 +69,74 @@ describe("create agent preferences", () => {
     expect(storage.savedPreferences()).toEqual({ isolation: "worktree" });
   });
 
+  it("persists security worker slots across preference load", () => {
+    const slots = [
+      { model: "grok/grok-4.6", replicas: 2 },
+      { model: "glm/glm-5.3-flash", replicas: 4 },
+    ];
+    const stored = mergeProviderPreferences({
+      preferences: {
+        provider: "security",
+        providerPreferences: {
+          security: { model: "orcarouter/orca/orcacyber-zero-1.0" },
+        },
+      },
+      provider: "security",
+      updates: { featureValues: { slots } },
+    });
+
+    expect(parseFormPreferences(stored)).toEqual(stored);
+  });
+
+  it("roundtrips security worker slots through preference storage", async () => {
+    const storage = new FakeCreateAgentPreferenceStorage();
+    const preferences = new CreateAgentPreferencesService(storage);
+    const slots = [{ model: "grok/grok-4.6", replicas: 2 }];
+
+    const save = preferences.update((current) =>
+      mergeProviderPreferences({
+        preferences: current,
+        provider: "security",
+        updates: { featureValues: { slots } },
+      }),
+    );
+    await storage.nextWrite();
+    storage.finishOldestWrite();
+    await save;
+
+    expect(storage.savedPreferences()).toEqual({
+      provider: "security",
+      providerPreferences: {
+        security: { featureValues: { slots } },
+      },
+    });
+    expect(await new CreateAgentPreferencesService(storage).load()).toEqual(
+      storage.savedPreferences(),
+    );
+  });
+
+  it("flushes security worker slots with the create-agent selection", () => {
+    const slots = [{ model: "glm/glm-5.3-flash", replicas: 4 }];
+    expect(
+      mergeCreateAgentSelectionPreferences({
+        preferences: {},
+        provider: "security",
+        modelId: "grok/grok-4.6",
+        modeId: "bypass",
+        featureValues: { slots },
+      }),
+    ).toEqual({
+      provider: "security",
+      providerPreferences: {
+        security: {
+          model: "grok/grok-4.6",
+          mode: "bypass",
+          featureValues: { slots },
+        },
+      },
+    });
+  });
+
   it("flushes the full create-agent selection into provider preferences", async () => {
     const storage = new FakeCreateAgentPreferenceStorage();
     const preferences = new CreateAgentPreferencesService(storage);
