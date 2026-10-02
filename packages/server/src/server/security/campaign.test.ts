@@ -4,7 +4,9 @@ import {
   expandSlots,
   parseCatalogModel,
   parseModelRef,
+  roundRobinByProvider,
   runCampaign,
+  startDelayMs,
   type CampaignClock,
   type CampaignItem,
   type CampaignPorts,
@@ -22,6 +24,7 @@ function clock(now = 0): CampaignClock & { advance(ms: number): void } {
       current += ms;
     },
     sleep: async (ms: number) => {
+      await Promise.resolve();
       current += ms;
     },
   };
@@ -31,7 +34,7 @@ function ports(overrides: Partial<CampaignPorts> = {}): CampaignPorts {
   return {
     blockedProviders: async () => new Set(),
     runWorker: async (item) => ({ text: item.key, findingsCount: 1 }),
-    shuffle: identityShuffle,
+    orderItems: identityShuffle,
     clock: clock(),
     ...overrides,
   };
@@ -100,6 +103,7 @@ describe("runCampaign", () => {
       ],
       fallback: null,
       maxParallel: 2,
+      staggerMs: 0,
       usageWaitMs: 0,
       usagePollMs: 1000,
       goal: "scan",
@@ -127,6 +131,7 @@ describe("runCampaign", () => {
       ],
       fallback: null,
       maxParallel: 2,
+      staggerMs: 0,
       usageWaitMs: 0,
       usagePollMs: 1000,
       goal: "scan",
@@ -152,6 +157,7 @@ describe("runCampaign", () => {
       slots: [{ model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 }],
       fallback: null,
       maxParallel: 1,
+      staggerMs: 0,
       usageWaitMs: 0,
       usagePollMs: 1000,
       goal: "scan",
@@ -186,6 +192,7 @@ describe("runCampaign", () => {
       ],
       fallback: null,
       maxParallel: 2,
+      staggerMs: 0,
       usageWaitMs: 0,
       usagePollMs: 1000,
       goal: "scan",
@@ -201,5 +208,71 @@ describe("runCampaign", () => {
     expect(seen.sort()).toEqual(
       ["glm/glm-5.3-flash#1:skipped-usage", "grok/grok-4.6#1:completed"].sort(),
     );
+  });
+
+  it("round-robins by provider before starting", () => {
+    expect(
+      roundRobinByProvider(
+        expandSlots(
+          [
+            { model: "grok/grok-4.6", replicas: 2 },
+            { model: "glm/glm-5.3-flash", replicas: 1 },
+            { model: "kimi/kimi-for-coding", replicas: 1 },
+          ],
+          null,
+        ),
+      ).map((item) => item.key),
+    ).toEqual([
+      "grok/grok-4.6#1",
+      "glm/glm-5.3-flash#1",
+      "kimi/kimi-for-coding#1",
+      "grok/grok-4.6#2",
+    ]);
+  });
+
+  it("staggers starts and skips usage before the stagger gate", async () => {
+    const started: number[] = [];
+    const startedKeys: string[] = [];
+    const sleeps: number[] = [];
+    const c = clock(1_000);
+    const innerSleep = c.sleep;
+    c.sleep = async (ms, signal) => {
+      sleeps.push(ms);
+      await innerSleep(ms, signal);
+    };
+    await runCampaign({
+      slots: [
+        { model: "glm/glm-5.3-flash", replicas: 1 },
+        { model: "grok/grok-4.6", replicas: 1 },
+        { model: "kimi/kimi-for-coding", replicas: 1 },
+      ],
+      fallback: null,
+      maxParallel: 2,
+      staggerMs: 30_000,
+      usageWaitMs: 0,
+      usagePollMs: 1000,
+      goal: "scan",
+      workerPrompt: (item) => item.key,
+      signal: new AbortController().signal,
+      ports: ports({
+        blockedProviders: async () => new Set(["glm"]),
+        clock: c,
+      }),
+      onStart: (item) => {
+        startedKeys.push(item.key);
+        started.push(c.now());
+      },
+    });
+    expect(startedKeys).toEqual(["grok/grok-4.6#1", "kimi/kimi-for-coding#1"]);
+    expect(sleeps).toContain(30_000);
+    expect(started[1]! - started[0]!).toBe(30_000);
+  });
+});
+
+describe("startDelayMs", () => {
+  it("is zero for the first start and for a disabled stagger", () => {
+    expect(startDelayMs(-1, 10, 30_000)).toBe(0);
+    expect(startDelayMs(0, 10, 0)).toBe(0);
+    expect(startDelayMs(0, 10, 30_000)).toBe(29_990);
   });
 });

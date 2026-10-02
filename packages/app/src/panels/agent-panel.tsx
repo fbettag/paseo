@@ -80,6 +80,7 @@ import {
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
 import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
+import { parseCampaignSnapshot } from "@/security/campaign-snapshot";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
@@ -1175,12 +1176,18 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
     rows: subagentRows,
   });
   const hasPluginComposerPills = useHasPluginComposerPills(serverId, workspaceId, agentId);
+  const campaign = useSessionStore((state) =>
+    parseCampaignSnapshot(
+      state.sessions[serverId]?.agents.get(agentId)?.runtimeInfo?.extra?.campaign,
+    ),
+  );
   const hasActiveComposer = !agentState.archivedAt && !isArchivingCurrentAgent;
   const hasVisibleAgentTracks = hasAgentTracks({
     subagentRows,
     tasks,
     archiveFinishedStatus: archiveFinishedSubagents.status,
     hasPluginComposerPills,
+    campaign,
   });
   const rawAgentInputDraft = useAgentInputDraft({
     draftKey: buildDraftStoreKey({
@@ -1275,6 +1282,7 @@ const ChatAgentReadyContent = memo(function ChatAgentReadyContent({
           archiveFinishedStatus={archiveFinishedSubagents.status}
           onArchiveFinished={archiveFinishedSubagents.archiveFinished}
           hasPluginComposerPills={hasPluginComposerPills}
+          campaign={campaign}
         />
       ) : null}
     </View>
