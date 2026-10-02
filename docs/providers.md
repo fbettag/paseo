@@ -223,6 +223,8 @@ Usage is fetched on demand from plugin usage sources. Each source registers thro
 
 Create a built-in source under `plugins/<name>-usage-source/` with the same manifest, entry, `server/`, `shared/`, and `icon.svg` layout as an external plugin. Add its ID to `builtinPlugins` in `packages/server/src/server/plugins/builtin/index.ts`. Keep credential discovery, API parsing, and normalization inside the source; use helpers from `@getpaseo/plugin/server/usage`. The wire shape remains source agnostic. See [plugin usage sources](plugins.md#usage-sources).
 
+`orcarouter-usage-source` reads `ORCAROUTER_API_KEY` or `$PASEO_HOME/keys/orca`, then billing spend plus a one-token `orcarouter/free` probe. Exhausted free allowance is a `free` side window (`Free used up`) so paid Orca models stay unblocked. Security workers that hit `free_quota_exhausted` / `err_free_used` skip as out of free usage instead of dumping the 402 JSON.
+
 `provider.usage.list` remains a compatibility RPC for older apps. It maps discovered reports to `ProviderUsage`. New clients use `usage.list_reports` after checking `server_info.features.usageSources`.
 
 ### Credentials are read only

@@ -42,6 +42,7 @@ import {
   type CampaignReport,
   type ModelRef,
 } from "../../security/campaign.js";
+import { classifyOrcaUsageSkip, UsageSkipError } from "../../security/usage-error.js";
 import { listFindingFiles } from "../../security/findings.js";
 import {
   parseSecurityParams,
@@ -79,7 +80,9 @@ const SECURITY_MODES: AgentMode[] = [
 
 const MANAGER_SYSTEM_PROMPT = [
   "You are the Security campaign manager.",
-  "The worker fleet is owned by this provider. Do not call create_agent for that fleet.",
+  "The worker fleet is owned by this provider and starts on the operator's campaign goal.",
+  "Do not call create_agent for that fleet.",
+  "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices.",
   "Plan, read evidence, and brief the operator.",
   "Severity decisions and report submission stay with the human.",
 ].join(" ");
@@ -514,7 +517,9 @@ class SecurityAgentSession implements AgentSession {
     });
     for (const report of reports) {
       if (report.status === "skipped-usage") {
-        this.emitNoticeText(workerNotice(report, "skipped-usage", report.findingsCount));
+        this.emitNoticeText(
+          workerNotice(report, "skipped-usage", report.findingsCount, report.error),
+        );
       }
     }
     return reports;
@@ -551,6 +556,8 @@ class SecurityAgentSession implements AgentSession {
       this.emitNoticeText(workerNotice(item, "completed", findingsCount));
       return { text: result.finalText, findingsCount };
     } catch (error) {
+      const skip = classifyOrcaUsageSkip(error);
+      if (skip) throw new UsageSkipError(skip);
       const message = error instanceof Error ? error.message : String(error);
       this.emitNoticeText(workerNotice(item, "failed", 0, message));
       throw error;
@@ -707,7 +714,11 @@ function workerNotice(
 ): string {
   const target = `${item.providerId}/${item.modelId} #${item.replica}`;
   if (status === "completed") return `Security · ${target} completed, ${findingsCount} findings`;
-  if (status === "skipped-usage") return `Security · ${target} skipped, out of usage`;
+  if (status === "skipped-usage") {
+    if (error === "free") return `Security · ${target} skipped, out of free usage`;
+    if (error === "credits") return `Security · ${target} skipped, out of credits`;
+    return `Security · ${target} skipped, out of usage`;
+  }
   if (error) return `Security · ${target} failed: ${error}`;
   return `Security · ${target} failed`;
 }
@@ -715,6 +726,11 @@ function workerNotice(
 function synthesisPrompt(reports: CampaignReport[]): string {
   const lines = reports.map((report) => {
     const target = `${report.providerId}/${report.modelId} #${report.replica}`;
+    if (report.status === "skipped-usage") {
+      if (report.error === "free") return `- ${target}: skipped, out of free usage`;
+      if (report.error === "credits") return `- ${target}: skipped, out of credits`;
+      return `- ${target}: skipped, out of usage`;
+    }
     const error = report.error ? `, error: ${report.error}` : "";
     return `- ${target}: ${report.status}, findings ${report.findingsCount}${error}`;
   });

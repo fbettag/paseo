@@ -1,4 +1,5 @@
 import type { SecuritySlot } from "./settings.js";
+import { classifyOrcaUsageSkip, UsageSkipError } from "./usage-error.js";
 
 export interface ModelRef {
   providerId: string;
@@ -51,14 +52,34 @@ export function parseModelRef(ref: string): ModelRef | null {
   const trimmed = ref.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash === trimmed.length - 1) return null;
+  const providerId = trimmed.slice(0, slash);
   return {
-    providerId: trimmed.slice(0, slash),
-    modelId: trimmed.slice(slash + 1),
+    providerId,
+    modelId: stripRepeatedProviderPrefix(providerId, trimmed.slice(slash + 1)),
   };
 }
 
 export function modelRefKey(ref: ModelRef): string {
   return `${ref.providerId}/${ref.modelId}`;
+}
+
+export function stripRepeatedProviderPrefix(providerId: string, modelId: string): string {
+  const prefix = `${providerId}/`;
+  let current = modelId;
+  while (current.startsWith(prefix)) {
+    const next = current.slice(prefix.length);
+    if (!next.includes("/")) break;
+    current = next;
+  }
+  return current;
+}
+
+export function parseCatalogModel(
+  providerId: string,
+  modelId: string,
+): { providerId: string; modelId: string } {
+  const prefixed = modelId.startsWith(`${providerId}/`) ? modelId : `${providerId}/${modelId}`;
+  return parseModelRef(prefixed) ?? { providerId, modelId };
 }
 
 export function expandSlots(
@@ -107,19 +128,29 @@ export async function runCampaign(input: RunCampaignInput): Promise<CampaignRepo
   const items = input.ports.shuffle(expandSlots(input.slots, input.fallback));
   const reports: CampaignReport[] = [];
   const queue = [...items];
+  const skippedModels = new Map<string, "free" | "credits">();
   const parallel = Math.max(1, Math.min(input.maxParallel, queue.length || 1));
   const workers = Array.from({ length: Math.min(parallel, queue.length) }, async () => {
     while (!input.signal.aborted) {
       const item = queue.shift();
       if (!item) return;
-      reports.push(await runOne(item, input));
+      reports.push(await runOne(item, input, skippedModels));
     }
   });
   await Promise.all(workers);
   return reports;
 }
 
-async function runOne(item: CampaignItem, input: RunCampaignInput): Promise<CampaignReport> {
+async function runOne(
+  item: CampaignItem,
+  input: RunCampaignInput,
+  skippedModels: Map<string, "free" | "credits">,
+): Promise<CampaignReport> {
+  const modelKey = modelRefKey(item);
+  const alreadySkipped = skippedModels.get(modelKey);
+  if (alreadySkipped) {
+    return { ...item, status: "skipped-usage", findingsCount: 0, error: alreadySkipped };
+  }
   const usable = await waitForUsage(item.providerId, input);
   if (!usable) {
     return { ...item, status: "skipped-usage", findingsCount: 0 };
@@ -139,6 +170,11 @@ async function runOne(item: CampaignItem, input: RunCampaignInput): Promise<Camp
   } catch (error) {
     if (input.signal.aborted) {
       return { ...item, status: "failed", findingsCount: 0, error: "aborted" };
+    }
+    const skip = error instanceof UsageSkipError ? error.kind : classifyOrcaUsageSkip(error);
+    if (skip) {
+      skippedModels.set(modelKey, skip);
+      return { ...item, status: "skipped-usage", findingsCount: 0, error: skip };
     }
     return {
       ...item,

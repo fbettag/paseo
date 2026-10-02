@@ -62,6 +62,7 @@ import { SECURITY_PROVIDER_ID, isWrapperProvider } from "./providers/security-ag
 import type { EnabledModel, RouteJudgment } from "../jev/model-router.js";
 import type { ProviderUsage } from "@getpaseo/protocol/messages";
 import { blockedProviderIds } from "../jev/usage-block.js";
+import { parseCatalogModel } from "../security/campaign.js";
 
 const DEFAULT_REFRESH_TIMEOUT_MS = 120_000;
 const MAX_REFRESH_TIMEOUT_MS = 2_147_483_647;
@@ -501,10 +502,11 @@ export class ProviderSnapshotManager {
         continue;
       }
       for (const model of filterSelectableAgentModels(entry.models)) {
+        const parsed = parseCatalogModel(entry.provider, model.id);
         candidates.push({
-          providerId: entry.provider,
+          providerId: parsed.providerId,
           providerLabel: entry.label ?? entry.provider,
-          modelId: model.id,
+          modelId: parsed.modelId,
           label: model.label,
           description: model.description,
           isDefault: model.isDefault === true,

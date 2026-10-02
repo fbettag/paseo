@@ -1,6 +1,6 @@
 import type { ProviderUsage } from "@getpaseo/protocol/messages";
 
-const SIDE_WINDOW_IDS = new Set(["code_review"]);
+const SIDE_WINDOW_IDS = new Set(["code_review", "free"]);
 const INACTIVE_VALUE = /^(expired|inactive|suspended|invalid|canceled|cancelled|disabled)$/i;
 const USAGE_ALIASES: Readonly<Record<string, string>> = { glm: "zai" };
 

@@ -27,6 +27,19 @@ function statusText(report: UsageReport): string | null {
   return report.status === "error" ? "Error" : "Unavailable";
 }
 
+function planBadgeVariant(report: UsageReport): "error" | "warning" | "muted" {
+  let warning = false;
+  for (const window of report.windows) {
+    if (window.tone === "danger") return "error";
+    if (window.tone === "warning") warning = true;
+  }
+  for (const detail of report.details ?? []) {
+    if (detail.tone === "danger") return "error";
+    if (detail.tone === "warning") warning = true;
+  }
+  return warning ? "warning" : "muted";
+}
+
 const ThemedRotateCw = withUnistyles(RotateCw);
 const ThemedLoadingSpinner = withUnistyles(LoadingSpinner);
 
@@ -71,7 +84,9 @@ export function UsageCard({
         <Text style={styles.name} numberOfLines={1}>
           {entry.sourceLabel}
         </Text>
-        {usage.planLabel ? <StatusBadge label={usage.planLabel} variant="muted" size="xs" /> : null}
+        {usage.planLabel ? (
+          <StatusBadge label={usage.planLabel} variant={planBadgeVariant(usage)} size="xs" />
+        ) : null}
         <View style={styles.headerSpacer} />
         {status ? (
           <View style={styles.statusRow}>
@@ -112,7 +127,14 @@ export function UsageCard({
               <Text style={styles.detailLabel} numberOfLines={1}>
                 {detail.label}
               </Text>
-              <Text style={styles.detailValue} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.detailValue,
+                  detail.tone === "danger" && styles.detailValueDanger,
+                  detail.tone === "warning" && styles.detailValueWarning,
+                ]}
+                numberOfLines={1}
+              >
                 {detail.value}
               </Text>
             </View>
@@ -310,6 +332,12 @@ const styles = StyleSheet.create((theme) => ({
   detailValue: {
     color: theme.colors.foreground,
     fontSize: theme.fontSize.sm,
+  },
+  detailValueDanger: {
+    color: theme.colors.statusDanger,
+  },
+  detailValueWarning: {
+    color: theme.colors.statusWarning,
   },
   error: {
     color: theme.colors.palette.red[300],
