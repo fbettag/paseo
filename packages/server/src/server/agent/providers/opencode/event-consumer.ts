@@ -32,6 +32,8 @@ export interface OpenCodeEventConsumerOptions {
   logger: Pick<Logger, "debug" | "warn">;
   createClient?: (baseUrl: string) => OpencodeClient;
   timing?: OpenCodeEventConsumerTiming;
+  /** When false, the SSE consumer waits for `start()`. Defaults to true. */
+  startImmediately?: boolean;
 }
 
 const WATCHDOG_MS = 30_000;
@@ -79,7 +81,9 @@ export class OpenCodeEventConsumer implements OpenCodeEventSource {
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
   private connectionAbort = new AbortController();
-  private connectionTask: Promise<void>;
+  private connectionTask: Promise<void> = Promise.resolve();
+  private readonly processExit: Promise<Error>;
+  private started = false;
   private attempt = 0;
   private phase: OpenCodeEventStreamPhase = "first-record";
   private lastOutcome?: OpenCodeConnectionOutcome;
@@ -93,12 +97,21 @@ export class OpenCodeEventConsumer implements OpenCodeEventSource {
       createOpencodeClient({ baseUrl: options.serverUrl });
     this.logger = options.logger;
     this.timing = options.timing ?? systemTiming;
+    this.processExit = options.processExit;
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
     });
     void this.readyPromise.catch(() => undefined);
-    this.connectionTask = this.consume(options.processExit);
+    if (options.startImmediately !== false) {
+      this.start();
+    }
+  }
+
+  start(): void {
+    if (this.started || this.closed) return;
+    this.started = true;
+    this.connectionTask = this.consume(this.processExit);
     void this.connectionTask.catch(() => undefined);
   }
 
@@ -285,5 +298,8 @@ function containsPluginError(error: unknown): boolean {
 }
 
 export type OpenCodeEventConsumerFactory = (
-  options: Pick<OpenCodeEventConsumerOptions, "serverUrl" | "processExit" | "logger">,
+  options: Pick<
+    OpenCodeEventConsumerOptions,
+    "serverUrl" | "processExit" | "logger" | "startImmediately"
+  >,
 ) => OpenCodeEventConsumer;

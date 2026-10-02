@@ -57,7 +57,12 @@ import {
 } from "./agent-configuration-validator.js";
 import type { ProviderRegistration } from "@getpaseo/plugin/server/provider";
 import { PluginAgentClientRegistry } from "./plugin-provider.js";
-import { JEV_PROVIDER_ID, type JevRouterPorts } from "./providers/jev-agent.js";
+import {
+  JEV_PROVIDER_ID,
+  type ChildAgentHandle,
+  type CreateChildAgentInput,
+  type JevRouterPorts,
+} from "./providers/jev-agent.js";
 import { SECURITY_PROVIDER_ID, isWrapperProvider } from "./providers/security-agent.js";
 import type { EnabledModel, RouteJudgment } from "../jev/model-router.js";
 import type { ProviderUsage } from "@getpaseo/protocol/messages";
@@ -267,6 +272,8 @@ export class ProviderSnapshotManager {
   private readonly continuationJudge?: (question: string, goal: string) => Promise<boolean | null>;
   private readonly jevPorts: JevRouterPorts;
   private jevUsageLookup: (() => Promise<readonly ProviderUsage[]>) | null = null;
+  private createChildAgentFn: ((input: CreateChildAgentInput) => Promise<ChildAgentHandle>) | null =
+    null;
   private runtimeSettings: AgentProviderRuntimeSettingsMap | undefined;
   private providerOverrides: Record<string, ProviderOverride> | undefined;
   private baseProviderOverrides: Record<string, ProviderOverride> | undefined;
@@ -306,6 +313,7 @@ export class ProviderSnapshotManager {
       judgeContinue: (question, goal) => this.judgeJevContinue(question, goal),
       blockedProviders: () => this.blockedJevProviders(),
       listProviderModes: (cwd) => this.listJevProviderModes(cwd),
+      createChildAgent: (input) => this.requireCreateChildAgent()(input),
     };
     this.generation = this.createGeneration(
       this.buildRegistry(this.runtimeSettings, this.providerOverrides),
@@ -560,6 +568,19 @@ export class ProviderSnapshotManager {
 
   setJevUsageLookup(lookup: (() => Promise<readonly ProviderUsage[]>) | null): void {
     this.jevUsageLookup = lookup;
+  }
+
+  setCreateChildAgent(
+    factory: ((input: CreateChildAgentInput) => Promise<ChildAgentHandle>) | null,
+  ): void {
+    this.createChildAgentFn = factory;
+  }
+
+  private requireCreateChildAgent(): (input: CreateChildAgentInput) => Promise<ChildAgentHandle> {
+    if (!this.createChildAgentFn) {
+      throw new Error("Child agent spawn is not connected to the daemon");
+    }
+    return this.createChildAgentFn;
   }
 
   private async listJevProviderModes(

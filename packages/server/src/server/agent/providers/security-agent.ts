@@ -29,7 +29,7 @@ import type {
 import type { AgentMetadata } from "@getpaseo/protocol/agent-types";
 import { mapJevPermissionMode } from "../../jev/permission-mode.js";
 import type { EnabledModel } from "../../jev/model-router.js";
-import type { JevRouterPorts } from "./jev-agent.js";
+import type { ChildAgentHandle, JevRouterPorts } from "./jev-agent.js";
 import { JEV_PROVIDER_ID } from "./jev-agent.js";
 import {
   defaultClock,
@@ -81,8 +81,10 @@ const SECURITY_MODES: AgentMode[] = [
 const MANAGER_SYSTEM_PROMPT = [
   "You are the Security campaign manager.",
   "The worker fleet is owned by this provider and starts on the operator's campaign goal.",
+  "Workers appear as native Paseo subagents of this session.",
   "Do not call create_agent for that fleet.",
-  "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices.",
+  "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices and as subagent activity.",
+  "Later operator messages are forwarded to the live fleet.",
   "Plan, read evidence, and brief the operator.",
   "Severity decisions and report submission stay with the human.",
 ].join(" ");
@@ -231,12 +233,12 @@ class SecurityAgentSession implements AgentSession {
   private inner: AgentSession | null = null;
   private manager: (ModelRef & { label: string; providerLabel: string }) | null = null;
   private providerModes: Readonly<Record<string, { id: string }[]>> = {};
-  private campaignStarted = false;
+  private fleetRunning = false;
   private campaignComplete = false;
   private unsubscribeInner: (() => void) | null = null;
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
-  private readonly workers = new Set<AgentSession>();
+  private readonly liveWorkers = new Map<string, ChildAgentHandle>();
   private readonly abort = new AbortController();
   private slots: SecuritySlot[];
 
@@ -267,7 +269,7 @@ class SecurityAgentSession implements AgentSession {
   ): void {
     this.bind(inner, manager);
     this.campaignComplete = campaignComplete;
-    this.campaignStarted = campaignComplete;
+    this.fleetRunning = false;
     if (!campaignComplete) {
       this.emitNoticeText("Security · resumed the manager. In-progress workers do not restart.");
     }
@@ -292,6 +294,7 @@ class SecurityAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
+    this.forwardCampaignPrompt(prompt);
     const inner = this.inner;
     if (!inner?.steerActiveTurn) return { status: "unavailable" };
     return inner.steerActiveTurn(prompt, options);
@@ -412,7 +415,7 @@ class SecurityAgentSession implements AgentSession {
     this.abort.abort();
     await Promise.allSettled([
       this.inner?.interrupt(),
-      ...[...this.workers].map((worker) => worker.interrupt()),
+      ...[...this.liveWorkers.values()].map((worker) => worker.interrupt()),
     ]);
   }
 
@@ -422,9 +425,9 @@ class SecurityAgentSession implements AgentSession {
     this.unsubscribeInner = null;
     await Promise.allSettled([
       this.inner?.close(),
-      ...[...this.workers].map((worker) => worker.close()),
+      ...[...this.liveWorkers.values()].map((worker) => worker.interrupt()),
     ]);
-    this.workers.clear();
+    this.liveWorkers.clear();
   }
 
   private async runPrompt(
@@ -432,7 +435,7 @@ class SecurityAgentSession implements AgentSession {
     options: AgentRunOptions | undefined,
   ): Promise<AgentRunResult> {
     const inner = await this.ensureManager();
-    this.maybeStartCampaign(prompt);
+    this.forwardCampaignPrompt(prompt);
     return inner.run(prompt, options);
   }
 
@@ -441,24 +444,40 @@ class SecurityAgentSession implements AgentSession {
     options: AgentRunOptions | undefined,
   ): Promise<{ turnId: string }> {
     const inner = await this.ensureManager();
-    this.maybeStartCampaign(prompt);
+    this.forwardCampaignPrompt(prompt);
     return inner.startTurn(prompt, options);
   }
 
-  private maybeStartCampaign(prompt: AgentPromptInput): void {
+  private forwardCampaignPrompt(prompt: AgentPromptInput): void {
     const text = promptText(prompt);
-    if (this.campaignStarted || this.campaignComplete) return;
-    if (text.trim().startsWith("/")) return;
-    if (text.trim().length === 0) return;
-    this.campaignStarted = true;
-    void this.runFleet(text)
+    if (!isCampaignGoal(text)) return;
+    if (this.fleetRunning && this.liveWorkers.size > 0) {
+      void this.forwardToFleet(text);
+      return;
+    }
+    if (this.fleetRunning) return;
+    this.startCampaign(text);
+  }
+
+  private startCampaign(goal: string): void {
+    this.fleetRunning = true;
+    this.campaignComplete = false;
+    void this.runFleet(goal)
       .then((reports) => this.enqueue(() => this.synthesize(reports)))
       .catch((error) => {
         this.logger.warn({ err: error }, "Security campaign failed");
         this.emitNoticeText(
           `Security · fleet failed: ${error instanceof Error ? error.message : String(error)}`,
         );
+      })
+      .finally(() => {
+        this.fleetRunning = false;
       });
+  }
+
+  private async forwardToFleet(text: string): Promise<void> {
+    this.emitNoticeText("Security · forwarding follow-up to the live fleet");
+    await Promise.allSettled([...this.liveWorkers.values()].map((worker) => worker.prompt(text)));
   }
 
   private async ensureManager(): Promise<AgentSession> {
@@ -514,14 +533,14 @@ class SecurityAgentSession implements AgentSession {
         shuffle: shuffleInPlace,
         clock: defaultClock(),
       },
+      onReport: (report) => {
+        if (report.status === "skipped-usage") {
+          this.emitNoticeText(
+            workerNotice(report, "skipped-usage", report.findingsCount, report.error),
+          );
+        }
+      },
     });
-    for (const report of reports) {
-      if (report.status === "skipped-usage") {
-        this.emitNoticeText(
-          workerNotice(report, "skipped-usage", report.findingsCount, report.error),
-        );
-      }
-    }
     return reports;
   }
 
@@ -532,29 +551,31 @@ class SecurityAgentSession implements AgentSession {
   ): Promise<{ text: string; findingsCount: number }> {
     const ports = this.requirePorts();
     if (signal.aborted) throw new Error("aborted");
-    const session = await ports.openSession(
-      item.providerId,
-      {
-        ...this.config,
-        provider: item.providerId,
-        model: item.modelId,
-        modeId: this.mappedMode(item.providerId),
-        thinkingOptionId: undefined,
-        featureValues: undefined,
-        systemPrompt: joinPrompts(this.config.systemPrompt, WORKER_SYSTEM_PROMPT),
-        title: `Security worker ${item.key}`,
-        internal: true,
-      },
-      this.launchContext,
-    );
-    this.workers.add(session);
+    const parentAgentId = this.launchContext?.agentId;
+    if (!ports.createChildAgent) {
+      throw new Error("Security child agent spawn is not connected to the daemon");
+    }
+    if (!parentAgentId) {
+      throw new Error("Security campaign workers need a parent Paseo agent");
+    }
+    this.emitNoticeText(workerNotice(item, "started", 0));
+    const worker = await ports.createChildAgent({
+      callerAgentId: parentAgentId,
+      provider: modelRefKey(item),
+      title: `Security · ${item.providerId}/${item.modelId} #${item.replica}`,
+      initialPrompt: prompt,
+      cwd: this.config.cwd,
+      mode: this.mappedMode(item.providerId),
+      systemPrompt: joinPrompts(this.config.systemPrompt, WORKER_SYSTEM_PROMPT),
+    });
+    this.liveWorkers.set(item.key, worker);
     try {
       const before = new Set(await listFindingFiles(this.config.cwd));
-      const result = await session.run(prompt);
+      const result = await worker.waitForFinish(signal);
       const after = await listFindingFiles(this.config.cwd);
       const findingsCount = after.filter((path) => !before.has(path)).length;
       this.emitNoticeText(workerNotice(item, "completed", findingsCount));
-      return { text: result.finalText, findingsCount };
+      return { text: result.text, findingsCount };
     } catch (error) {
       const skip = classifyOrcaUsageSkip(error);
       if (skip) throw new UsageSkipError(skip);
@@ -562,12 +583,7 @@ class SecurityAgentSession implements AgentSession {
       this.emitNoticeText(workerNotice(item, "failed", 0, message));
       throw error;
     } finally {
-      this.workers.delete(session);
-      try {
-        await session.close();
-      } catch (error) {
-        this.logger.warn({ err: error, worker: item.key }, "Security worker close failed");
-      }
+      this.liveWorkers.delete(item.key);
     }
   }
 
@@ -713,6 +729,7 @@ function workerNotice(
   error?: string,
 ): string {
   const target = `${item.providerId}/${item.modelId} #${item.replica}`;
+  if (status === "started") return `Security · ${target} started`;
   if (status === "completed") return `Security · ${target} completed, ${findingsCount} findings`;
   if (status === "skipped-usage") {
     if (error === "free") return `Security · ${target} skipped, out of free usage`;
@@ -755,6 +772,11 @@ function promptText(prompt: AgentPromptInput): string {
     if (block.type === "text") parts.push(block.text);
   }
   return parts.join("\n");
+}
+
+function isCampaignGoal(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && !trimmed.startsWith("/");
 }
 
 function retag(event: AgentStreamEvent): AgentStreamEvent | null {

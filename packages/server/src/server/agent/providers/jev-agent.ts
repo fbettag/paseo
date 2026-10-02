@@ -105,6 +105,23 @@ const JEV_MODES: AgentMode[] = JEV_PERMISSION_MODES.map((mode) => ({
   description: mode.description,
 }));
 
+export interface CreateChildAgentInput {
+  callerAgentId: string;
+  provider: string;
+  title: string;
+  initialPrompt: string;
+  cwd?: string;
+  mode?: string;
+  systemPrompt?: string;
+}
+
+export interface ChildAgentHandle {
+  agentId: string;
+  waitForFinish(signal?: AbortSignal): Promise<{ text: string }>;
+  prompt(text: string): Promise<void>;
+  interrupt(): Promise<void>;
+}
+
 export interface JevRouterPorts {
   listCandidates(cwd?: string): Promise<EnabledModel[]>;
   openSession(
@@ -124,6 +141,7 @@ export interface JevRouterPorts {
   judgeContinue?(question: string, goal: string): Promise<boolean | null>;
   blockedProviders(): Promise<ReadonlySet<string>>;
   listProviderModes?(cwd?: string): Promise<Readonly<Record<string, { id: string }[]>>>;
+  createChildAgent?(input: CreateChildAgentInput): Promise<ChildAgentHandle>;
 }
 
 export class JevAgentClient {

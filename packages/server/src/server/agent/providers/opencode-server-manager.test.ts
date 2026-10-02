@@ -224,6 +224,22 @@ describe("OpenCodeServerManager generations", () => {
     expect(await runtime.managedProcesses.list()).toEqual([]);
   });
 
+  test("dedicated acquisition holds a ref before the server is marked retired", async () => {
+    const { manager, runtime } = createTestManager([4481], { autoAnnounce: false });
+
+    const dedicatedStart = manager.acquireDedicated({ PASEO_AGENT_ID: "parent" });
+    await runtime.settle();
+    expect(runtime.terminatedPorts).toEqual([]);
+
+    runtime.processForPort(4481).announceListening();
+    const dedicatedAcquisition = await dedicatedStart;
+    expect(dedicatedAcquisition.server.url).toBe("http://127.0.0.1:4481");
+    expect(runtime.terminatedPorts).toEqual([]);
+
+    await dedicatedAcquisition.release();
+    expect(runtime.terminatedPorts).toEqual([4481]);
+  });
+
   test("dedicated server startup is protected from retired cleanup", async () => {
     const { manager, runtime } = createTestManager([4473, 4474], { autoAnnounce: false });
 

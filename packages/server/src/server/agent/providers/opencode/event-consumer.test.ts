@@ -45,6 +45,24 @@ describe("OpenCodeEventConsumer", () => {
     await expect(closePromise).resolves.toBeUndefined();
   });
 
+  test("does not connect until start() when startImmediately is false", async () => {
+    const upstream = await createSseUpstream();
+    const consumer = new OpenCodeEventConsumer({
+      serverUrl: upstream.url,
+      processExit: new Promise<Error>(() => undefined),
+      logger: createRecordingLogger(),
+      startImmediately: false,
+    });
+    cleanups.push(async () => {
+      await consumer.close();
+      await upstream.close();
+    });
+    expect(upstream.requests).toHaveLength(0);
+    consumer.start();
+    await upstream.connected(1);
+    expect(upstream.requests.length).toBeGreaterThan(0);
+  });
+
   test("waits for server.connected and reconnects once after EOF", async () => {
     const upstream = await createSseUpstream();
     const timing = new ControlledTiming();
