@@ -1880,6 +1880,23 @@ export const es: TranslationResources = {
     archiveFinishedAction: "Archivar subagentes finalizados",
     archiveFinishedRetry: "Reintentar ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "Campaña",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} hallazgos",
+      queued: "En cola",
+      running: "En curso",
+      completed: "Listo",
+      failed: "Falló",
+      skippedUsage: "Sin uso",
+      skippedFree: "Sin uso gratuito",
+      skippedCredits: "Sin créditos",
+      openFinding: "Abrir {{title}}",
+      openWorker: "Abrir {{label}}",
+      emptyFindings: "Aún no hay hallazgos",
+    },
+  },
   panels: {
     draft: {
       newAgent: "Nuevo agente",

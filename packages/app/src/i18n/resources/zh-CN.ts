@@ -1811,6 +1811,23 @@ export const zhCN: TranslationResources = {
     archiveFinishedAction: "归档已完成的 subagent",
     archiveFinishedRetry: "重试 ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "战役",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} 条发现",
+      queued: "排队",
+      running: "运行中",
+      completed: "完成",
+      failed: "失败",
+      skippedUsage: "额度用尽",
+      skippedFree: "免费额度用尽",
+      skippedCredits: "积分用尽",
+      openFinding: "打开 {{title}}",
+      openWorker: "打开 {{label}}",
+      emptyFindings: "暂无发现",
+    },
+  },
   panels: {
     draft: {
       newAgent: "新建 Agent",

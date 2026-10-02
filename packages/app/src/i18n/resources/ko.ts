@@ -1842,6 +1842,23 @@ export const ko: TranslationResources = {
     archiveFinishedAction: "완료된 하위 에이전트 보관",
     archiveFinishedRetry: "다시 시도 ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "캠페인",
+      progress: "{{done}}/{{total}}",
+      findings: "발견 {{count}}건",
+      queued: "대기",
+      running: "실행 중",
+      completed: "완료",
+      failed: "실패",
+      skippedUsage: "사용량 소진",
+      skippedFree: "무료 한도 소진",
+      skippedCredits: "크레딧 소진",
+      openFinding: "{{title}} 열기",
+      openWorker: "{{label}} 열기",
+      emptyFindings: "아직 발견 없음",
+    },
+  },
   panels: {
     draft: {
       newAgent: "새 에이전트",

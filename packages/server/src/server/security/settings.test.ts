@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_MAX_PARALLEL,
+  DEFAULT_PACE,
   parseSecurityParams,
   parseSlotsFeatureValue,
+  resolveSessionSchedule,
   resolveSessionSlots,
+  SECURITY_PACE_FEATURE_ID,
   SECURITY_SLOTS_FEATURE_ID,
 } from "./settings.js";
 
@@ -12,9 +15,32 @@ describe("parseSecurityParams", () => {
   it("fills defaults when params are missing", () => {
     expect(parseSecurityParams(undefined)).toMatchObject({
       slots: [],
+      pace: DEFAULT_PACE,
       maxParallel: DEFAULT_MAX_PARALLEL,
+      staggerMs: 30_000,
       usageWaitMs: 900_000,
       usagePollMs: 30_000,
+    });
+  });
+
+  it("lets pace win over a leftover maxParallel", () => {
+    expect(parseSecurityParams({ pace: "quiet", maxParallel: 4 })).toMatchObject({
+      pace: "quiet",
+      maxParallel: 1,
+      staggerMs: 30_000,
+    });
+    expect(parseSecurityParams({ pace: "aggressive" })).toMatchObject({
+      pace: "aggressive",
+      maxParallel: 4,
+      staggerMs: 0,
+    });
+  });
+
+  it("infers pace from maxParallel when pace is absent", () => {
+    expect(parseSecurityParams({ maxParallel: 3 })).toMatchObject({
+      pace: "steady",
+      maxParallel: 3,
+      staggerMs: 30_000,
     });
   });
 
@@ -61,5 +87,20 @@ describe("resolveSessionSlots", () => {
       { model: "glm/glm-5.3-flash", replicas: 4 },
     ]);
     expect(parseSlotsFeatureValue("nope")).toEqual([]);
+  });
+});
+
+describe("resolveSessionSchedule", () => {
+  it("uses the session pace feature over provider params", () => {
+    expect(
+      resolveSessionSchedule(
+        { [SECURITY_PACE_FEATURE_ID]: "steady" },
+        {
+          pace: "quiet",
+          maxParallel: 1,
+          staggerMs: 30_000,
+        },
+      ),
+    ).toEqual({ pace: "steady", maxParallel: 2, staggerMs: 30_000 });
   });
 });

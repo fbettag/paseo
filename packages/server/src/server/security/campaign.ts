@@ -32,7 +32,7 @@ export interface CampaignPorts {
     prompt: string,
     signal: AbortSignal,
   ): Promise<{ text: string; findingsCount: number }>;
-  shuffle<T>(items: T[]): T[];
+  orderItems(items: CampaignItem[]): CampaignItem[];
   clock: CampaignClock;
 }
 
@@ -40,6 +40,7 @@ export interface RunCampaignInput {
   slots: readonly SecuritySlot[];
   fallback: ModelRef | null;
   maxParallel: number;
+  staggerMs: number;
   usageWaitMs: number;
   usagePollMs: number;
   goal: string;
@@ -47,6 +48,7 @@ export interface RunCampaignInput {
   signal: AbortSignal;
   ports: CampaignPorts;
   onReport?: (report: CampaignReport) => void;
+  onStart?: (item: CampaignItem) => void;
 }
 
 export function parseModelRef(ref: string): ModelRef | null {
@@ -107,15 +109,35 @@ export function expandSlots(
   return items;
 }
 
-export function shuffleInPlace<T>(items: readonly T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    const current = copy[i]!;
-    copy[i] = copy[j]!;
-    copy[j] = current;
+export function roundRobinByProvider(items: readonly CampaignItem[]): CampaignItem[] {
+  const buckets = new Map<string, CampaignItem[]>();
+  const order: string[] = [];
+  for (const item of items) {
+    const bucket = buckets.get(item.providerId);
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+    order.push(item.providerId);
+    buckets.set(item.providerId, [item]);
   }
-  return copy;
+  const result: CampaignItem[] = [];
+  let added = true;
+  while (added) {
+    added = false;
+    for (const providerId of order) {
+      const next = buckets.get(providerId)?.shift();
+      if (!next) continue;
+      result.push(next);
+      added = true;
+    }
+  }
+  return result;
+}
+
+export function startDelayMs(lastStartAt: number, now: number, staggerMs: number): number {
+  if (staggerMs <= 0 || lastStartAt < 0) return 0;
+  return Math.max(0, lastStartAt + staggerMs - now);
 }
 
 export function defaultClock(): CampaignClock {
@@ -126,16 +148,17 @@ export function defaultClock(): CampaignClock {
 }
 
 export async function runCampaign(input: RunCampaignInput): Promise<CampaignReport[]> {
-  const items = input.ports.shuffle(expandSlots(input.slots, input.fallback));
+  const items = input.ports.orderItems(expandSlots(input.slots, input.fallback));
   const reports: CampaignReport[] = [];
   const queue = [...items];
   const skippedModels = new Map<string, "free" | "credits">();
+  const starter = createStartGate(input);
   const parallel = Math.max(1, Math.min(input.maxParallel, queue.length || 1));
   const workers = Array.from({ length: Math.min(parallel, queue.length) }, async () => {
     while (!input.signal.aborted) {
       const item = queue.shift();
       if (!item) return;
-      const report = await runOne(item, input, skippedModels);
+      const report = await runOne(item, input, skippedModels, starter);
       reports.push(report);
       input.onReport?.(report);
     }
@@ -144,10 +167,31 @@ export async function runCampaign(input: RunCampaignInput): Promise<CampaignRepo
   return reports;
 }
 
+function createStartGate(input: RunCampaignInput): { wait(): Promise<void> } {
+  let lastStartAt = -1;
+  let chain = Promise.resolve();
+  return {
+    async wait() {
+      const turn = chain.then(async () => {
+        const delay = startDelayMs(lastStartAt, input.ports.clock.now(), input.staggerMs);
+        if (delay > 0) await input.ports.clock.sleep(delay, input.signal);
+        lastStartAt = input.ports.clock.now();
+        return undefined;
+      });
+      chain = turn.then(
+        () => undefined,
+        () => undefined,
+      );
+      await turn;
+    },
+  };
+}
+
 async function runOne(
   item: CampaignItem,
   input: RunCampaignInput,
   skippedModels: Map<string, "free" | "credits">,
+  starter: { wait(): Promise<void> },
 ): Promise<CampaignReport> {
   const modelKey = modelRefKey(item);
   const alreadySkipped = skippedModels.get(modelKey);
@@ -158,6 +202,8 @@ async function runOne(
   if (!usable) {
     return { ...item, status: "skipped-usage", findingsCount: 0 };
   }
+  await starter.wait();
+  input.onStart?.(item);
   try {
     const result = await input.ports.runWorker(
       item,

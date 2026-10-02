@@ -1857,6 +1857,23 @@ export const en = {
     archiveFinishedAction: "Archive finished subagents",
     archiveFinishedRetry: "Retry ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "Campaign",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} findings",
+      queued: "Queued",
+      running: "Running",
+      completed: "Done",
+      failed: "Failed",
+      skippedUsage: "Out of usage",
+      skippedFree: "Out of free usage",
+      skippedCredits: "Out of credits",
+      openFinding: "Open {{title}}",
+      openWorker: "Open {{label}}",
+      emptyFindings: "No findings yet",
+    },
+  },
   panels: {
     draft: {
       newAgent: "New Agent",

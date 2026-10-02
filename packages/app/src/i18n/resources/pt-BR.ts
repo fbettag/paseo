@@ -1865,6 +1865,23 @@ export const ptBR: TranslationResources = {
     archiveFinishedAction: "Arquivar subagentes concluídos",
     archiveFinishedRetry: "Tentar novamente ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "Campanha",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} achados",
+      queued: "Na fila",
+      running: "Em execução",
+      completed: "Concluído",
+      failed: "Falhou",
+      skippedUsage: "Sem uso",
+      skippedFree: "Sem uso gratuito",
+      skippedCredits: "Sem créditos",
+      openFinding: "Abrir {{title}}",
+      openWorker: "Abrir {{label}}",
+      emptyFindings: "Nenhum achado ainda",
+    },
+  },
   panels: {
     draft: {
       newAgent: "Novo Agente",

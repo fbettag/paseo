@@ -1851,6 +1851,23 @@ export const ja: TranslationResources = {
     archiveFinishedAction: "完了したサブエージェントをアーカイブ",
     archiveFinishedRetry: "再試行 ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "キャンペーン",
+      progress: "{{done}}/{{total}}",
+      findings: "指摘 {{count}} 件",
+      queued: "待機中",
+      running: "実行中",
+      completed: "完了",
+      failed: "失敗",
+      skippedUsage: "使用量切れ",
+      skippedFree: "無料枠切れ",
+      skippedCredits: "クレジット切れ",
+      openFinding: "{{title}}を開く",
+      openWorker: "{{label}}を開く",
+      emptyFindings: "まだ指摘はありません",
+    },
+  },
   panels: {
     draft: {
       newAgent: "新しいエージェント",

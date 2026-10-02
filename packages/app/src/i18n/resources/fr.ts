@@ -1884,6 +1884,23 @@ export const fr: TranslationResources = {
     archiveFinishedAction: "Archiver les sous-agents terminés",
     archiveFinishedRetry: "Réessayer ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "Campagne",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} constats",
+      queued: "En attente",
+      running: "En cours",
+      completed: "Terminé",
+      failed: "Échec",
+      skippedUsage: "Quota épuisé",
+      skippedFree: "Quota gratuit épuisé",
+      skippedCredits: "Crédits épuisés",
+      openFinding: "Ouvrir {{title}}",
+      openWorker: "Ouvrir {{label}}",
+      emptyFindings: "Aucun constat pour le moment",
+    },
+  },
   panels: {
     draft: {
       newAgent: "Nouvel agent",

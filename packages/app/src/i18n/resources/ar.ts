@@ -1832,6 +1832,23 @@ export const ar: TranslationResources = {
     archiveFinishedAction: "أرشفة الوكلاء الفرعيين المكتملين",
     archiveFinishedRetry: "إعادة المحاولة ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "الحملة",
+      progress: "{{done}}/{{total}}",
+      findings: "{{count}} نتائج",
+      queued: "في الانتظار",
+      running: "قيد التشغيل",
+      completed: "تم",
+      failed: "فشل",
+      skippedUsage: "نفد الاستخدام",
+      skippedFree: "نفد الاستخدام المجاني",
+      skippedCredits: "نفدت الاعتمادات",
+      openFinding: "فتح {{title}}",
+      openWorker: "فتح {{label}}",
+      emptyFindings: "لا نتائج بعد",
+    },
+  },
   panels: {
     draft: {
       newAgent: "وكيل جديد",

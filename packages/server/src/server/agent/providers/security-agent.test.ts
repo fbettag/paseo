@@ -216,6 +216,8 @@ function createFakeChild(
 }
 
 const PARENT_LAUNCH = { agentId: "security-parent" };
+const FLEET = { usageWaitMs: 0, staggerMs: 0 } as const;
+const LIVE_FLEET = { usageWaitMs: 0, staggerMs: 0, pace: "aggressive" as const };
 
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -248,7 +250,7 @@ describe("SecurityAgentClient", () => {
 
   it("opens the manager and two replicas of that model when slots are empty", async () => {
     const harness = ports();
-    const client = new SecurityAgentClient(createTestLogger(), harness.ports, { usageWaitMs: 0 });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
     const session = await client.createSession(
       {
         provider: "security",
@@ -286,7 +288,7 @@ describe("SecurityAgentClient", () => {
       ),
     });
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
-      usageWaitMs: 0,
+      ...FLEET,
       slots: [{ model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 }],
     });
     const session = await client.createSession(
@@ -312,7 +314,7 @@ describe("SecurityAgentClient", () => {
   it("skips a blocked worker after the wait budget", async () => {
     const harness = ports(new Set(["glm"]));
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
-      usageWaitMs: 0,
+      ...FLEET,
       slots: [
         { model: "grok/grok-4.6", replicas: 1 },
         { model: "glm/glm-5.3-flash", replicas: 1 },
@@ -341,7 +343,7 @@ describe("SecurityAgentClient", () => {
   it("lists slots as a composer feature and honors session featureValues", async () => {
     const harness = ports();
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
-      usageWaitMs: 0,
+      ...FLEET,
       slots: [{ model: "glm/glm-5.3-flash", replicas: 4 }],
     });
     const listed = await client.listFeatures({
@@ -357,6 +359,11 @@ describe("SecurityAgentClient", () => {
           { id: "grok/grok-4.6", label: "Grok · Grok 4.6" },
           { id: "glm/glm-5.3-flash", label: "GLM · GLM Flash" },
         ],
+      }),
+      expect.objectContaining({
+        type: "select",
+        id: "pace",
+        value: "quiet",
       }),
     ]);
 
@@ -382,9 +389,7 @@ describe("SecurityAgentClient", () => {
 
   it("applies setFeature slots before the fleet starts", async () => {
     const harness = ports();
-    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
-      usageWaitMs: 0,
-    });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
     const session = await client.createSession(
       {
         provider: "security",
@@ -452,9 +457,9 @@ describe("SecurityAgentClient", () => {
     expect(harness.opened).toEqual([]);
   });
 
-  it("forwards a later user turn to live workers", async () => {
+  it("forwards a later user turn to the latest live worker", async () => {
     const harness = ports(new Set(), {}, { holdWorkers: true });
-    const client = new SecurityAgentClient(createTestLogger(), harness.ports, { usageWaitMs: 0 });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, LIVE_FLEET);
     const session = await client.createSession(
       {
         provider: "security",
@@ -473,8 +478,56 @@ describe("SecurityAgentClient", () => {
     await waitFor(() => harness.children.length === 2);
     await session.startTurn("continue with a 2nd account");
     await waitFor(() => childReceivedFollowUp(harness.children, "continue with a 2nd account"));
-    expect(notices.some((line) => line.includes("forwarding follow-up"))).toBe(true);
+    expect(notices.some((line) => line.includes("latest live worker"))).toBe(true);
+    expect(harness.children[0]?.prompts).not.toContain("continue with a 2nd account");
+    expect(harness.children[1]?.prompts).toContain("continue with a 2nd account");
     for (const child of harness.children) child.finish();
     await waitFor(() => noticesInclude(notices, "completed"));
   });
+
+  it("starts one quiet worker at a time", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 1);
+    expect(harness.children).toHaveLength(1);
+    harness.children[0]?.finish();
+    await waitFor(() => harness.children.length === 2);
+  });
+
+  it("publishes a campaign snapshot on the manager runtime extra", async () => {
+    const harness = ports();
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    const snapshots: unknown[] = [];
+    session.subscribe((event) => {
+      if (event.type === "model_changed") {
+        snapshots.push(event.runtimeInfo.extra?.campaign);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => snapshots.some(campaignComplete));
+    const last = snapshots.at(-1);
+    expect(campaignComplete(last)).toBe(true);
+    expect(last).toMatchObject({ total: 2, pace: "quiet", complete: true });
+  });
 });
+
+function campaignComplete(value: unknown): boolean {
+  return Boolean(value && typeof value === "object" && (value as { complete?: boolean }).complete);
+}

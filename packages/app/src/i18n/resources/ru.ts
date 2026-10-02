@@ -1864,6 +1864,23 @@ export const ru: TranslationResources = {
     archiveFinishedAction: "Архивировать завершенные субагенты",
     archiveFinishedRetry: "Повторить ({{failed}}/{{total}})",
   },
+  security: {
+    campaign: {
+      title: "Кампания",
+      progress: "{{done}}/{{total}}",
+      findings: "находок: {{count}}",
+      queued: "В очереди",
+      running: "Выполняется",
+      completed: "Готово",
+      failed: "Ошибка",
+      skippedUsage: "Лимит исчерпан",
+      skippedFree: "Бесплатный лимит исчерпан",
+      skippedCredits: "Кредиты исчерпаны",
+      openFinding: "Открыть {{title}}",
+      openWorker: "Открыть {{label}}",
+      emptyFindings: "Пока нет находок",
+    },
+  },
   panels: {
     draft: {
       newAgent: "Новый агент",

@@ -36,22 +36,42 @@ import {
   expandSlots,
   modelRefKey,
   parseModelRef,
+  roundRobinByProvider,
   runCampaign,
-  shuffleInPlace,
   type CampaignItem,
   type CampaignReport,
   type ModelRef,
 } from "../../security/campaign.js";
 import { classifyOrcaUsageSkip, UsageSkipError } from "../../security/usage-error.js";
-import { listFindingFiles } from "../../security/findings.js";
 import {
+  FINDINGS_WATCH_MS,
+  listFindingFiles,
+  summarizeFindingFile,
+} from "../../security/findings.js";
+import {
+  parsePace,
   parseSecurityParams,
   parseSlotsFeatureValue,
+  resolveSessionSchedule,
   resolveSessionSlots,
+  scheduleFromPace,
+  SECURITY_PACE_FEATURE_ID,
+  SECURITY_PACES,
   SECURITY_SLOTS_FEATURE_ID,
   type ResolvedSecurityParams,
+  type ResolvedSecuritySchedule,
+  type SecurityPace,
   type SecuritySlot,
 } from "../../security/settings.js";
+import {
+  appendCampaignFindings,
+  createCampaignSnapshot,
+  patchCampaignWorker,
+  tallyCampaign,
+  type CampaignSnapshot,
+  type CampaignWorkerSnapshot,
+  type CampaignWorkerState,
+} from "../../security/snapshot.js";
 
 export const SECURITY_PROVIDER_ID = "security";
 
@@ -93,7 +113,8 @@ const WORKER_SYSTEM_PROMPT = [
   "You are a Security campaign worker.",
   "Follow AGENTS.md in this workspace.",
   "Do not spawn further agents. The fleet is provider-owned.",
-  "Write findings under engagements/<name>/out/<host>/findings/<class>/.",
+  "Write findings only under engagements/<name>/out/<host>/findings/<class>/.",
+  "Do not edit application source or any file outside that out/ tree.",
 ].join(" ");
 
 export function isWrapperProvider(providerId: string): boolean {
@@ -148,7 +169,8 @@ export class SecurityAgentClient {
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
     const candidates = await this.readCandidates(config.cwd);
     const slots = resolveSessionSlots(config.featureValues, this.params.slots);
-    return [buildSlotsFeature(slots, slotOptions(candidates))];
+    const schedule = resolveSessionSchedule(config.featureValues, this.params);
+    return [buildSlotsFeature(slots, slotOptions(candidates)), buildPaceFeature(schedule.pace)];
   }
 
   async createSession(
@@ -190,9 +212,11 @@ export class SecurityAgentClient {
     );
     const candidates = await this.readCandidates(cwd);
     const resumedSlots = routed.slots ?? this.params.slots;
+    const resumedPace = routed.pace ?? this.params.pace;
     const resumedFeatureValues = {
       ...overrides?.featureValues,
       [SECURITY_SLOTS_FEATURE_ID]: resumedSlots,
+      [SECURITY_PACE_FEATURE_ID]: resumedPace,
     };
     const session = new SecurityAgentSession(
       this.logger,
@@ -240,7 +264,10 @@ class SecurityAgentSession implements AgentSession {
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly liveWorkers = new Map<string, ChildAgentHandle>();
   private readonly abort = new AbortController();
+  private lastLiveWorkerKey: string | null = null;
+  private campaign: CampaignSnapshot | null = null;
   private slots: SecuritySlot[];
+  private schedule: ResolvedSecuritySchedule;
 
   constructor(
     private readonly logger: Logger,
@@ -252,10 +279,11 @@ class SecurityAgentSession implements AgentSession {
     private readonly createOptions?: AgentCreateSessionOptions,
   ) {
     this.slots = resolveSessionSlots(config.featureValues, params.slots);
+    this.schedule = resolveSessionSchedule(config.featureValues, params);
   }
 
   get features(): AgentFeature[] {
-    return [buildSlotsFeature(this.slots, this.slotChoices)];
+    return [buildSlotsFeature(this.slots, this.slotChoices), buildPaceFeature(this.schedule.pace)];
   }
 
   get id(): string | null {
@@ -311,7 +339,7 @@ class SecurityAgentSession implements AgentSession {
     const inner = this.inner;
     if (!inner) return;
     for await (const event of inner.streamHistory()) {
-      const tagged = retag(event);
+      const tagged = this.retag(event);
       if (tagged) yield tagged;
     }
   }
@@ -323,14 +351,7 @@ class SecurityAgentSession implements AgentSession {
       sessionId: inner?.sessionId ?? null,
       model: this.manager ? modelRefKey(this.manager) : (this.config.model ?? null),
       modeId: "bypass",
-      extra: this.manager
-        ? {
-            managerProvider: this.manager.providerId,
-            managerModel: this.manager.modelId,
-            managerLabel: this.manager.label,
-            campaignComplete: this.campaignComplete,
-          }
-        : undefined,
+      extra: this.mergeExtra(inner?.extra),
     };
   }
 
@@ -343,6 +364,18 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    if (featureId === SECURITY_PACE_FEATURE_ID) {
+      const pace = parsePace(value);
+      if (!pace) {
+        throw new Error(`Unknown Security pace '${String(value)}'`);
+      }
+      this.schedule = scheduleFromPace(pace);
+      this.config.featureValues = {
+        ...this.config.featureValues,
+        [SECURITY_PACE_FEATURE_ID]: pace,
+      };
+      return;
+    }
     if (featureId !== SECURITY_SLOTS_FEATURE_ID) {
       throw new Error(`Unknown Security feature '${featureId}'`);
     }
@@ -394,6 +427,7 @@ class SecurityAgentSession implements AgentSession {
         providerLabel: manager.providerLabel,
         campaignComplete: this.campaignComplete,
         slots: this.slots,
+        pace: this.schedule.pace,
         inner,
       },
     };
@@ -476,8 +510,12 @@ class SecurityAgentSession implements AgentSession {
   }
 
   private async forwardToFleet(text: string): Promise<void> {
-    this.emitNoticeText("Security · forwarding follow-up to the live fleet");
-    await Promise.allSettled([...this.liveWorkers.values()].map((worker) => worker.prompt(text)));
+    const worker =
+      (this.lastLiveWorkerKey ? this.liveWorkers.get(this.lastLiveWorkerKey) : undefined) ??
+      [...this.liveWorkers.values()].at(-1);
+    if (!worker) return;
+    this.emitNoticeText("Security · forwarding follow-up to the latest live worker");
+    await worker.prompt(text);
   }
 
   private async ensureManager(): Promise<AgentSession> {
@@ -510,18 +548,22 @@ class SecurityAgentSession implements AgentSession {
   private async runFleet(goal: string): Promise<CampaignReport[]> {
     const ports = this.requirePorts();
     const manager = this.manager;
+    const schedule = this.schedule;
     const items = expandSlots(this.slots, manager);
-    this.emitNoticeText(
-      `Security · fleet ${items.length} workers, max ${this.params.maxParallel} in parallel`,
-    );
+    this.campaign = createCampaignSnapshot(items, schedule.pace);
+    this.emitCampaign();
+    this.emitNoticeText(`Security · fleet ${items.length} workers, pace ${schedule.pace}`);
     if (items.length === 0) {
       this.campaignComplete = true;
+      this.campaign = tallyCampaign({ ...this.campaign, complete: true });
+      this.emitCampaign();
       return [];
     }
     const reports = await runCampaign({
       slots: this.slots,
       fallback: manager,
-      maxParallel: this.params.maxParallel,
+      maxParallel: schedule.maxParallel,
+      staggerMs: schedule.staggerMs,
       usageWaitMs: this.params.usageWaitMs,
       usagePollMs: this.params.usagePollMs,
       goal,
@@ -530,10 +572,18 @@ class SecurityAgentSession implements AgentSession {
       ports: {
         blockedProviders: () => ports.blockedProviders(),
         runWorker: (item, prompt, signal) => this.runWorker(item, prompt, signal),
-        shuffle: shuffleInPlace,
+        orderItems: roundRobinByProvider,
         clock: defaultClock(),
       },
+      onStart: (item) => {
+        this.patchWorker(item.key, { state: "running" });
+      },
       onReport: (report) => {
+        this.patchWorker(report.key, {
+          state: reportStatusState(report.status),
+          findingsCount: report.findingsCount,
+          error: report.error,
+        });
         if (report.status === "skipped-usage") {
           this.emitNoticeText(
             workerNotice(report, "skipped-usage", report.findingsCount, report.error),
@@ -541,6 +591,10 @@ class SecurityAgentSession implements AgentSession {
         }
       },
     });
+    if (this.campaign) {
+      this.campaign = tallyCampaign({ ...this.campaign, complete: true });
+      this.emitCampaign();
+    }
     return reports;
   }
 
@@ -569,11 +623,15 @@ class SecurityAgentSession implements AgentSession {
       systemPrompt: joinPrompts(this.config.systemPrompt, WORKER_SYSTEM_PROMPT),
     });
     this.liveWorkers.set(item.key, worker);
+    this.lastLiveWorkerKey = item.key;
+    this.patchWorker(item.key, { agentId: worker.agentId });
+    const baseline = new Set(await listFindingFiles(this.config.cwd));
+    const seen = new Set(baseline);
+    const watch = this.watchFindings(seen);
     try {
-      const before = new Set(await listFindingFiles(this.config.cwd));
       const result = await worker.waitForFinish(signal);
-      const after = await listFindingFiles(this.config.cwd);
-      const findingsCount = after.filter((path) => !before.has(path)).length;
+      const after = await this.refreshFindings(seen);
+      const findingsCount = after.filter((path) => !baseline.has(path)).length;
       this.emitNoticeText(workerNotice(item, "completed", findingsCount));
       return { text: result.text, findingsCount };
     } catch (error) {
@@ -583,7 +641,11 @@ class SecurityAgentSession implements AgentSession {
       this.emitNoticeText(workerNotice(item, "failed", 0, message));
       throw error;
     } finally {
+      watch.stop();
       this.liveWorkers.delete(item.key);
+      if (this.lastLiveWorkerKey === item.key) {
+        this.lastLiveWorkerKey = [...this.liveWorkers.keys()].at(-1) ?? null;
+      }
     }
   }
 
@@ -607,7 +669,7 @@ class SecurityAgentSession implements AgentSession {
     this.inner = inner;
     this.manager = manager;
     this.unsubscribeInner = inner.subscribe((event) => {
-      const tagged = retag(event);
+      const tagged = this.retag(event);
       if (tagged) this.emit(tagged);
     });
     const handle = this.describePersistence();
@@ -626,6 +688,98 @@ class SecurityAgentSession implements AgentSession {
       provider: SECURITY_PROVIDER_ID,
       item: { type: "notification", level: "info", message },
     });
+  }
+
+  private patchWorker(key: string, patch: Partial<CampaignWorkerSnapshot>): void {
+    if (!this.campaign) return;
+    this.campaign = patchCampaignWorker(this.campaign, key, patch);
+    this.emitCampaign();
+  }
+
+  private emitCampaign(): void {
+    if (!this.campaign) return;
+    this.emit({
+      type: "model_changed",
+      provider: SECURITY_PROVIDER_ID,
+      runtimeInfo: {
+        provider: SECURITY_PROVIDER_ID,
+        sessionId: this.inner?.id ?? null,
+        model: this.manager ? modelRefKey(this.manager) : (this.config.model ?? null),
+        modeId: "bypass",
+        extra: this.runtimeExtra(),
+      },
+    });
+  }
+
+  private watchFindings(seen: Set<string>): { stop(): void } {
+    const controller = new AbortController();
+    const onParentAbort = () => controller.abort();
+    this.abort.signal.addEventListener("abort", onParentAbort, { once: true });
+    const tick = async () => {
+      while (!controller.signal.aborted) {
+        await this.refreshFindings(seen);
+        try {
+          await defaultClock().sleep(FINDINGS_WATCH_MS, controller.signal);
+        } catch {
+          break;
+        }
+      }
+      this.abort.signal.removeEventListener("abort", onParentAbort);
+    };
+    void tick();
+    return {
+      stop() {
+        controller.abort();
+      },
+    };
+  }
+
+  private async refreshFindings(seen: Set<string>): Promise<string[]> {
+    const files = await listFindingFiles(this.config.cwd);
+    const fresh = files.filter((path) => !seen.has(path));
+    for (const path of fresh) seen.add(path);
+    if (fresh.length === 0 || !this.campaign) return files;
+    const added = await Promise.all(
+      fresh.map((path) => summarizeFindingFile(path, this.config.cwd)),
+    );
+    this.campaign = appendCampaignFindings(this.campaign, added);
+    this.emitCampaign();
+    return files;
+  }
+
+  private mergeExtra(inner?: AgentMetadata): AgentMetadata {
+    return {
+      ...inner,
+      ...this.runtimeExtra(),
+    };
+  }
+
+  private runtimeExtra(): AgentMetadata {
+    const extra: AgentMetadata = {};
+    if (this.manager) {
+      extra.managerProvider = this.manager.providerId;
+      extra.managerModel = this.manager.modelId;
+      extra.managerLabel = this.manager.label;
+      extra.campaignComplete = this.campaignComplete;
+    }
+    if (this.campaign) extra.campaign = this.campaign;
+    return extra;
+  }
+
+  private retag(event: AgentStreamEvent): AgentStreamEvent | null {
+    if (event.type === "mode_changed") return null;
+    if (event.type === "model_changed") {
+      return {
+        ...event,
+        provider: SECURITY_PROVIDER_ID,
+        runtimeInfo: {
+          ...event.runtimeInfo,
+          provider: SECURITY_PROVIDER_ID,
+          extra: this.mergeExtra(event.runtimeInfo.extra),
+        },
+      };
+    }
+    return { ...event, provider: SECURITY_PROVIDER_ID };
   }
 
   private emit(event: AgentStreamEvent): void {
@@ -679,6 +833,40 @@ function buildSlotsFeature(
     minReplicas: 1,
     maxReplicas: 8,
   };
+}
+
+function buildPaceFeature(value: SecurityPace): AgentFeature {
+  return {
+    type: "select",
+    id: SECURITY_PACE_FEATURE_ID,
+    label: "Pace",
+    description: "How many workers start at once, and how long to wait between starts.",
+    tooltip: "Quiet serializes starts. Aggressive runs four at once.",
+    icon: "zap",
+    desktopTrigger: "label",
+    value,
+    options: SECURITY_PACES.map((pace) => ({
+      id: pace,
+      label: paceLabel(pace),
+      description: paceDescription(pace),
+    })),
+  };
+}
+
+function paceLabel(pace: SecurityPace): string {
+  if (pace === "quiet") return "Quiet";
+  if (pace === "steady") return "Steady";
+  return "Aggressive";
+}
+
+function paceDescription(pace: SecurityPace): string {
+  if (pace === "quiet") return "One worker at a time, 30s between starts";
+  if (pace === "steady") return "Two workers, 30s between starts";
+  return "Four workers, no stagger";
+}
+
+function reportStatusState(status: CampaignReport["status"]): CampaignWorkerState {
+  return status;
 }
 
 function resolveManager(
@@ -779,21 +967,6 @@ function isCampaignGoal(text: string): boolean {
   return trimmed.length > 0 && !trimmed.startsWith("/");
 }
 
-function retag(event: AgentStreamEvent): AgentStreamEvent | null {
-  if (event.type === "mode_changed") return null;
-  if (event.type === "model_changed") {
-    return {
-      ...event,
-      provider: SECURITY_PROVIDER_ID,
-      runtimeInfo: {
-        ...event.runtimeInfo,
-        provider: SECURITY_PROVIDER_ID,
-      },
-    };
-  }
-  return { ...event, provider: SECURITY_PROVIDER_ID };
-}
-
 async function readProviderModes(
   logger: Logger,
   ports: JevRouterPorts,
@@ -865,6 +1038,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
   manager: ModelRef & { label: string; providerLabel: string };
   campaignComplete: boolean;
   slots: SecuritySlot[] | null;
+  pace: SecurityPace | null;
 } | null {
   if (!metadata) return null;
   const providerId = metadata.managerProvider;
@@ -891,6 +1065,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
     },
     campaignComplete: metadata.campaignComplete === true,
     slots: Array.isArray(metadata.slots) ? parseSlotsFeatureValue(metadata.slots) : null,
+    pace: parsePace(metadata.pace),
   };
 }
 
