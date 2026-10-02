@@ -142,6 +142,17 @@ const OPENCODE_MODES: AgentProviderModeDefinition[] = [
   },
 ];
 
+const SECURITY_MODES: AgentProviderModeDefinition[] = [
+  {
+    id: "bypass",
+    label: "Bypass",
+    description: "Skip permission prompts on the manager and the worker fleet.",
+    icon: "ShieldOff",
+    colorTier: "dangerous",
+    isUnattended: true,
+  },
+];
+
 const JEV_MODES: AgentProviderModeDefinition[] = [
   {
     id: "ask",
@@ -293,6 +304,15 @@ export const AGENT_PROVIDER_DEFINITIONS: AgentProviderDefinition[] = [
     description: "Routes each task to a model that is enabled in Paseo",
     defaultModeId: "auto",
     modes: JEV_MODES,
+  },
+  {
+    id: "security",
+    label: "Security",
+    description:
+      "Bug-bounty campaign manager that drives a bypass worker fleet over enabled Paseo models",
+    enabledByDefault: false,
+    defaultModeId: "bypass",
+    modes: SECURITY_MODES,
   },
 ];
 
