@@ -27,4 +27,19 @@ describe("resolveOpenCodeModel", () => {
       modelID: "orcarouter/free",
     });
   });
+
+  it("unwraps a direct picker id without doubling the provider", () => {
+    expect(resolveOpenCodeModel("orcarouter/tencent/hy4-preview", "orcarouter")).toEqual({
+      providerID: "orcarouter",
+      modelID: "tencent/hy4-preview",
+    });
+    expect(resolveOpenCodeModel("orcarouter/orcarouter/free", "orcarouter")).toEqual({
+      providerID: "orcarouter",
+      modelID: "orcarouter/free",
+    });
+    expect(resolveOpenCodeModel("blackbit/xiaomi_mimo_v2_6_flash", "blackbit")).toEqual({
+      providerID: "blackbit",
+      modelID: "xiaomi_mimo_v2_6_flash",
+    });
+  });
 });
