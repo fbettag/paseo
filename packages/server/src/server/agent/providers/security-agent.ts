@@ -131,7 +131,7 @@ const MANAGER_SYSTEM_PROMPT = [
   "Workers appear as native Paseo subagents of this session.",
   "Do not call create_agent for that fleet.",
   "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices and as subagent activity.",
-  "Later operator messages are forwarded to the live fleet.",
+  "Later operator messages stay in this chat. Do not stop or steer workers that are already running.",
   "Plan, read evidence, and brief the operator.",
   "A fresh session writes the finding board before this turn. Read that file only.",
   "Do not open the finding files into this chat.",
@@ -308,7 +308,8 @@ class SecurityAgentSession implements AgentSession {
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly liveWorkers = new Map<string, ChildAgentHandle>();
   private fleetAbort = new AbortController();
-  private lastLiveWorkerKey: string | null = null;
+  private managerEpoch = 0;
+  private fleetStopTimer: ReturnType<typeof setTimeout> | null = null;
   private campaign: CampaignSnapshot | null = null;
   private slots: SecuritySlot[];
   private schedule: ResolvedSecuritySchedule;
@@ -372,6 +373,7 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async run(prompt: AgentPromptInput, options?: AgentRunOptions): Promise<AgentRunResult> {
+    this.bumpManagerEpoch();
     return this.enqueue(() => this.runPrompt(prompt, options));
   }
 
@@ -379,6 +381,7 @@ class SecurityAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
+    this.bumpManagerEpoch();
     return this.enqueue(() => this.startPrompt(prompt, options));
   }
 
@@ -386,6 +389,7 @@ class SecurityAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
+    this.bumpManagerEpoch();
     this.noteCampaignPrompt(prompt);
     const inner = this.inner;
     if (!inner?.steerActiveTurn) return { status: "unavailable" };
@@ -531,15 +535,13 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async interrupt(): Promise<void> {
-    this.boardAbort.abort();
-    this.fleetAbort.abort();
-    await Promise.allSettled([
-      this.inner?.interrupt(),
-      ...[...this.liveWorkers.values()].map((worker) => worker.interrupt()),
-    ]);
+    const epoch = this.managerEpoch;
+    await this.inner?.interrupt();
+    this.scheduleFleetStop(epoch);
   }
 
   async close(): Promise<void> {
+    this.clearFleetStop();
     this.boardAbort.abort();
     this.fleetAbort.abort();
     this.unsubscribeInner?.();
@@ -586,10 +588,6 @@ class SecurityAgentSession implements AgentSession {
   private noteCampaignPrompt(prompt: AgentPromptInput): void {
     const text = promptText(prompt);
     if (!isCampaignGoal(text)) return;
-    if (this.fleetRunning && this.liveWorkers.size > 0) {
-      void this.forwardToFleet(text);
-      return;
-    }
     if (this.fleetRunning) return;
     if (this.pendingFleetGoal !== null) {
       this.pendingFleetGoal = `${this.pendingFleetGoal}\n${text}`;
@@ -679,20 +677,31 @@ class SecurityAgentSession implements AgentSession {
       });
   }
 
-  private async forwardToFleet(text: string): Promise<void> {
-    const worker =
-      (this.lastLiveWorkerKey ? this.liveWorkers.get(this.lastLiveWorkerKey) : undefined) ??
-      [...this.liveWorkers.values()].at(-1);
-    if (!worker) return;
-    this.emitNoticeText("Security · forwarding follow-up to the latest live worker");
-    try {
-      await worker.prompt(text);
-    } catch (error) {
-      this.logger.warn({ err: error }, "Security follow-up was not delivered");
-      this.emitNoticeText(
-        `Security · follow-up was not delivered: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  private bumpManagerEpoch(): void {
+    this.managerEpoch += 1;
+    this.clearFleetStop();
+  }
+
+  private scheduleFleetStop(epoch: number): void {
+    this.clearFleetStop();
+    this.fleetStopTimer = setTimeout(() => {
+      this.fleetStopTimer = null;
+      if (this.managerEpoch !== epoch) return;
+      this.abortRunningFleet();
+    }, 0);
+  }
+
+  private clearFleetStop(): void {
+    if (!this.fleetStopTimer) return;
+    clearTimeout(this.fleetStopTimer);
+    this.fleetStopTimer = null;
+  }
+
+  private abortRunningFleet(): void {
+    this.boardAbort.abort();
+    this.fleetAbort.abort();
+    const workers = [...this.liveWorkers.values()];
+    void Promise.allSettled(workers.map((worker) => worker.interrupt()));
   }
 
   private async ensureManager(): Promise<AgentSession> {
@@ -819,7 +828,6 @@ class SecurityAgentSession implements AgentSession {
       systemPrompt: joinPrompts(this.config.systemPrompt, WORKER_SYSTEM_PROMPT),
     });
     this.liveWorkers.set(item.key, worker);
-    this.lastLiveWorkerKey = item.key;
     this.patchWorker(item.key, { agentId: worker.agentId });
     const watch = this.watchFindings(item, signal);
     try {
@@ -837,9 +845,6 @@ class SecurityAgentSession implements AgentSession {
     } finally {
       watch.stop();
       this.liveWorkers.delete(item.key);
-      if (this.lastLiveWorkerKey === item.key) {
-        this.lastLiveWorkerKey = [...this.liveWorkers.keys()].at(-1) ?? null;
-      }
     }
   }
 
