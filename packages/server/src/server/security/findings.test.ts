@@ -79,6 +79,62 @@ describe("listFindingFiles", () => {
     expect(closed).toEqual([]);
   });
 
+  it("names a source finding from its comment instead of the banner", () => {
+    const block = [
+      "/*",
+      " * Model of the aac AIF waiter retaining a context across sleep.",
+      " *",
+      " * Build:",
+      " *   cc -O1 f160.c",
+      " */",
+      "",
+      "#include <stdint.h>",
+    ].join("\n");
+    expect(parseFindingMarkdown(block).title).toBe(
+      "Model of the aac AIF waiter retaining a context across sleep.",
+    );
+
+    const oneLine =
+      "/* Model of read-only adlink ioctls reaching divide-by-zero and DMA setup. */\n\n#include <stdint.h>\n";
+    expect(parseFindingMarkdown(oneLine).title).toBe(
+      "Model of read-only adlink ioctls reaching divide-by-zero and DMA setup.",
+    );
+  });
+
+  it("skips a source-commit banner and a git patch header", () => {
+    const banner = [
+      "/* -- source commits",
+      " *",
+      " * FreeBSD F-167 runtime probe: COMPAT_FREEBSD32 ptrace policy bypass.",
+      " */",
+    ].join("\n");
+    expect(parseFindingMarkdown(banner).title).toBe(
+      "FreeBSD F-167 runtime probe: COMPAT_FREEBSD32 ptrace policy bypass.",
+    );
+
+    const patch = [
+      "From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001",
+      "From: Security Researcher <security@example.invalid>",
+      "Date: Tue, 8 Sep 2026 00:00:00 +0000",
+      "Subject: [PATCH] unix: serialize pathname socket bindings across vnode aliases",
+      "",
+    ].join("\n");
+    expect(parseFindingMarkdown(patch).title).toBe(
+      "unix: serialize pathname socket bindings across vnode aliases",
+    );
+  });
+
+  it("uses the file name when a source file has no header comment", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paseo-security-source-title-"));
+    const dir = join(root, "freebsd", "poc", "findings");
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, "f161-mlx5-fwdump-copyout-race.c");
+    await writeFile(file, "#include <stdint.h>\n\nstruct dump_state {\n  int copyout;\n};\n");
+    const card = await summarizeFindingFile(file, root);
+    expect(card.title).toBe("F161 mlx5 fwdump copyout race");
+    expect(card.summary).not.toContain("#include");
+  });
+
   it("summarizes a finding file on disk", async () => {
     const root = await mkdtemp(join(tmpdir(), "paseo-security-finding-card-"));
     const dir = join(root, "engagements", "acme", "out", "app.example", "findings", "xss");

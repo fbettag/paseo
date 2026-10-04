@@ -141,7 +141,7 @@ const MODELS: EnabledModel[] = [
 function ports(
   blocked: ReadonlySet<string> = new Set(),
   runErrors: Readonly<Record<string, Error>> = {},
-  options: { holdWorkers?: boolean; promptThrows?: boolean; holdManagerTurn?: boolean } = {},
+  options: { holdWorkers?: boolean; holdManagerTurn?: boolean } = {},
 ): {
   ports: JevRouterPorts;
   opened: Array<{ providerId: string; model?: string; internal?: boolean }>;
@@ -150,6 +150,7 @@ function ports(
     title: string;
     initialPrompt: string;
     prompts: string[];
+    interrupts: number;
     finish: () => void;
   }>;
   sessions: FakeSession[];
@@ -163,6 +164,7 @@ function ports(
     title: string;
     initialPrompt: string;
     prompts: string[];
+    interrupts: number;
     finish: () => void;
   }> = [];
   return {
@@ -199,8 +201,7 @@ function ports(
           grok: [{ id: "full-access" }],
           glm: [{ id: "bypassPermissions" }],
         }),
-      createChildAgent: (input) =>
-        createFakeChild(input, children, runErrors, options.holdWorkers, options.promptThrows),
+      createChildAgent: (input) => createFakeChild(input, children, runErrors, options.holdWorkers),
     },
   };
 }
@@ -212,23 +213,35 @@ function createFakeChild(
     title: string;
     initialPrompt: string;
     prompts: string[];
+    interrupts: number;
     finish: () => void;
   }>,
   runErrors: Readonly<Record<string, Error>>,
   holdWorkers?: boolean,
-  promptThrows?: boolean,
 ): Promise<ChildAgentHandle> {
   const parsed = parseModelRef(input.provider);
   const providerId = parsed?.providerId ?? input.provider;
   let resolveFinish: (value: { text: string }) => void = () => undefined;
-  const finished = new Promise<{ text: string }>((resolve) => {
-    resolveFinish = resolve;
+  let rejectFinish: (error: Error) => void = () => undefined;
+  let settled = false;
+  const finished = new Promise<{ text: string }>((resolve, reject) => {
+    resolveFinish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    rejectFinish = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
   });
   const record = {
     provider: input.provider,
     title: input.title,
     initialPrompt: input.initialPrompt,
     prompts: [] as string[],
+    interrupts: 0,
     finish: () => resolveFinish({ text: "done" }),
   };
   children.push(record);
@@ -246,9 +259,11 @@ function createFakeChild(
     },
     prompt: async (text) => {
       record.prompts.push(text);
-      if (promptThrows) throw new Error("already has an active run");
     },
-    interrupt: async () => undefined,
+    interrupt: async () => {
+      record.interrupts += 1;
+      rejectFinish(new Error("aborted"));
+    },
   });
 }
 
@@ -266,13 +281,6 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 function noticesInclude(notices: readonly string[], needle: string): boolean {
   return notices.some((line) => line.includes(needle));
-}
-
-function childReceivedFollowUp(
-  children: ReadonlyArray<{ prompts: readonly string[] }>,
-  text: string,
-): boolean {
-  return children.some((child) => child.prompts.includes(text));
 }
 
 describe("SecurityAgentClient", () => {
@@ -520,7 +528,7 @@ describe("SecurityAgentClient", () => {
     expect(harness.opened).toEqual([]);
   });
 
-  it("forwards a later user turn to the latest live worker", async () => {
+  it("keeps a later manager message off the running workers", async () => {
     const harness = ports(new Set(), {}, { holdWorkers: true });
     const client = new SecurityAgentClient(createTestLogger(), harness.ports, LIVE_FLEET);
     const session = await client.createSession(
@@ -540,10 +548,10 @@ describe("SecurityAgentClient", () => {
     await session.startTurn("scan the engagement");
     await waitFor(() => harness.children.length === 2);
     await session.startTurn("continue with a 2nd account");
-    await waitFor(() => childReceivedFollowUp(harness.children, "continue with a 2nd account"));
-    expect(notices.some((line) => line.includes("latest live worker"))).toBe(true);
-    expect(harness.children[0]?.prompts).not.toContain("continue with a 2nd account");
-    expect(harness.children[1]?.prompts).toContain("continue with a 2nd account");
+    expect(harness.sessions[0]?.prompts).toContain("continue with a 2nd account");
+    expect(harness.children.every((child) => child.prompts.length === 0)).toBe(true);
+    expect(harness.children.every((child) => child.interrupts === 0)).toBe(true);
+    expect(notices.some((line) => line.includes("latest live worker"))).toBe(false);
     for (const child of harness.children) child.finish();
     await waitFor(() => noticesInclude(notices, "completed"));
   });
@@ -571,9 +579,9 @@ describe("SecurityAgentClient", () => {
     for (const child of harness.children) child.finish();
   });
 
-  it("reports a busy worker instead of rejecting the follow-up", async () => {
-    const harness = ports(new Set(), {}, { holdWorkers: true, promptThrows: true });
-    const client = new SecurityAgentClient(createTestLogger(), harness.ports, LIVE_FLEET);
+  it("stops the running fleet without starting the next queued worker", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
     const session = await client.createSession(
       {
         provider: "security",
@@ -582,19 +590,33 @@ describe("SecurityAgentClient", () => {
       },
       PARENT_LAUNCH,
     );
-    const notices: string[] = [];
-    session.subscribe((event) => {
-      if (event.type === "timeline" && event.item.type === "notification") {
-        notices.push(event.item.message);
-      }
-    });
     await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 1);
+    await session.interrupt();
+    await waitFor(() => harness.children[0]?.interrupts === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(harness.children).toHaveLength(1);
+  });
+
+  it("still starts the next quiet worker after a manager chat", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 1);
+    await session.startTurn("what did you find so far");
+    expect(harness.children[0]?.interrupts).toBe(0);
+    expect(harness.children[0]?.prompts).toEqual([]);
+    harness.children[0]?.finish();
     await waitFor(() => harness.children.length === 2);
-    await expect(session.startTurn("continue with a 2nd account")).resolves.toEqual({
-      turnId: "turn-2",
-    });
-    await waitFor(() => noticesInclude(notices, "follow-up was not delivered"));
-    for (const child of harness.children) child.finish();
+    expect(harness.children[1]?.interrupts).toBe(0);
   });
 
   it("drops a stored slot whose id is not a current option", async () => {
