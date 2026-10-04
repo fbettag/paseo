@@ -281,7 +281,7 @@ class SecurityAgentSession implements AgentSession {
   private chain: Promise<void> = Promise.resolve();
   private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
   private readonly liveWorkers = new Map<string, ChildAgentHandle>();
-  private readonly abort = new AbortController();
+  private fleetAbort = new AbortController();
   private lastLiveWorkerKey: string | null = null;
   private campaign: CampaignSnapshot | null = null;
   private slots: SecuritySlot[];
@@ -487,7 +487,7 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async interrupt(): Promise<void> {
-    this.abort.abort();
+    this.fleetAbort.abort();
     await Promise.allSettled([
       this.inner?.interrupt(),
       ...[...this.liveWorkers.values()].map((worker) => worker.interrupt()),
@@ -495,7 +495,7 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async close(): Promise<void> {
-    this.abort.abort();
+    this.fleetAbort.abort();
     this.unsubscribeInner?.();
     this.unsubscribeInner = null;
     await Promise.allSettled([
@@ -610,9 +610,11 @@ class SecurityAgentSession implements AgentSession {
   }
 
   private startCampaign(goal: string): void {
+    this.fleetAbort = new AbortController();
+    const signal = this.fleetAbort.signal;
     this.fleetRunning = true;
     this.campaignComplete = false;
-    void this.runFleet(goal)
+    void this.runFleet(goal, signal)
       .then((reports) => this.enqueue(() => this.synthesize(reports)))
       .catch((error) => {
         this.logger.warn({ err: error }, "Security campaign failed");
@@ -668,7 +670,7 @@ class SecurityAgentSession implements AgentSession {
     return inner;
   }
 
-  private async runFleet(goal: string): Promise<CampaignReport[]> {
+  private async runFleet(goal: string, fleetSignal: AbortSignal): Promise<CampaignReport[]> {
     const ports = this.requirePorts();
     const manager = this.manager;
     const schedule = this.schedule;
@@ -693,7 +695,7 @@ class SecurityAgentSession implements AgentSession {
       usagePollMs: this.params.usagePollMs,
       goal,
       workerPrompt,
-      signal: this.abort.signal,
+      signal: fleetSignal,
       ports: {
         blockedProviders: () => ports.blockedProviders(),
         runWorker: (item, prompt, signal) => this.runWorker(item, prompt, signal),
@@ -752,7 +754,7 @@ class SecurityAgentSession implements AgentSession {
     this.patchWorker(item.key, { agentId: worker.agentId });
     const baseline = new Set(await listFindingFiles(this.config.cwd));
     const seen = new Set(baseline);
-    const watch = this.watchFindings(seen);
+    const watch = this.watchFindings(seen, signal);
     try {
       const result = await worker.waitForFinish(signal);
       const after = await this.refreshFindings(seen);
@@ -776,7 +778,7 @@ class SecurityAgentSession implements AgentSession {
 
   private async synthesize(reports: CampaignReport[]): Promise<void> {
     this.campaignComplete = true;
-    if (this.abort.signal.aborted) return;
+    if (this.fleetAbort.signal.aborted) return;
     const inner = this.inner;
     if (!inner || reports.length === 0) return;
     await inner.run(synthesisPrompt(reports));
@@ -837,10 +839,11 @@ class SecurityAgentSession implements AgentSession {
     });
   }
 
-  private watchFindings(seen: Set<string>): { stop(): void } {
+  private watchFindings(seen: Set<string>, signal: AbortSignal): { stop(): void } {
     const controller = new AbortController();
     const onParentAbort = () => controller.abort();
-    this.abort.signal.addEventListener("abort", onParentAbort, { once: true });
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onParentAbort, { once: true });
     const tick = async () => {
       while (!controller.signal.aborted) {
         await this.refreshFindings(seen);
@@ -850,7 +853,7 @@ class SecurityAgentSession implements AgentSession {
           break;
         }
       }
-      this.abort.signal.removeEventListener("abort", onParentAbort);
+      signal.removeEventListener("abort", onParentAbort);
     };
     void tick();
     return {
