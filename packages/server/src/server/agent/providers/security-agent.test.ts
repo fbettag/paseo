@@ -858,9 +858,8 @@ describe("SecurityAgentClient", () => {
       PARENT_LAUNCH,
     );
     const started = session.startTurn("audit the omarchy source");
-    await waitFor(() => childTitled(harness.children, "security board"));
-    childByTitle(harness.children, "security board")?.finish();
     await started;
+    expect(childTitled(harness.children, "security board")).toBe(true);
     await waitFor(() => childPrefixed(harness.children, "Security ·"));
     const boardChild = childByTitle(harness.children, "security board");
     expect(boardChild?.initialPrompt).toContain("chained, reported");

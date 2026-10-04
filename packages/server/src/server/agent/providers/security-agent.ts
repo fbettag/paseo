@@ -133,8 +133,8 @@ const MANAGER_SYSTEM_PROMPT = [
   "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices and as subagent activity.",
   "Later operator messages are forwarded to the live fleet.",
   "Plan, read evidence, and brief the operator.",
-  "A fresh session builds the finding board once, in a subagent, from the current findings.",
-  "Read that board file only. Do not open the finding files into this chat.",
+  "A fresh session writes the finding board before this turn. Read that file only.",
+  "Do not open the finding files into this chat.",
   "Source-audit workers each receive a random disjoint slice of the target tree and a ledger of findings already filed.",
   "Do not paste that board, that ledger, or those slices into the operator status.",
   "Severity decisions and report submission stay with the human.",
@@ -1018,9 +1018,12 @@ class SecurityAgentSession implements AgentSession {
       [this.config.title, text].filter((part) => part && part.length > 0).join("\n"),
     );
     const files = await listFindingFiles(this.config.cwd, { scopes });
-    if (files.length > 0) await this.runBoardBuilder(scopes, files);
+    // The UI abandons a run that has not started within 60s. Writing the
+    // board locally lets this turn start. The subagent only refines status
+    // lines and must not block startTurn.
     await this.keepBoardOrFallback(files);
     this.emitNoticeText(`Security · finding board lists ${files.length} current findings`);
+    if (files.length > 0) void this.runBoardBuilder(scopes, files);
     return withBoardNote(prompt, this.boardFile);
   }
 
@@ -1049,6 +1052,7 @@ class SecurityAgentSession implements AgentSession {
         }),
       });
       await worker.waitForFinish(this.boardAbort.signal);
+      await this.keepBoardOrFallback(files);
     } catch (error) {
       this.logger.warn({ err: error }, "Security board subagent did not finish");
     }
