@@ -87,13 +87,21 @@ export async function listFindingFiles(
   root: string,
   options?: { scopes?: readonly string[] },
 ): Promise<string[]> {
-  const found: string[] = [];
-  await walk(root, false, found);
-  found.sort();
   const scopes = options?.scopes;
-  if (!scopes) return found;
-  if (scopes.length === 0) return [];
-  return found.filter((filePath) => {
+  if (scopes && scopes.length === 0) return [];
+  const found: string[] = [];
+  if (scopes) {
+    for (const scope of scopes) {
+      const parts = scope.split("/").filter(Boolean);
+      await walk(join(root, ...parts), false, found);
+    }
+  } else {
+    await walk(root, false, found);
+  }
+  const unique = [...new Set(found)];
+  unique.sort();
+  if (!scopes) return unique;
+  return unique.filter((filePath) => {
     const relativePath = relative(root, filePath).split("\\").join("/");
     return scopes.some(
       (scope) => relativePath === scope.slice(0, -1) || relativePath.startsWith(scope),
