@@ -29,6 +29,7 @@ import type {
 import type { AgentMetadata } from "@getpaseo/protocol/agent-types";
 import { mapJevPermissionMode } from "../../jev/permission-mode.js";
 import type { EnabledModel } from "../../jev/model-router.js";
+import { isSystemInjectedEnvelope } from "../agent-prompt.js";
 import type { ChildAgentHandle, JevRouterPorts } from "./jev-agent.js";
 import { JEV_PROVIDER_ID } from "./jev-agent.js";
 import {
@@ -544,7 +545,14 @@ class SecurityAgentSession implements AgentSession {
       [...this.liveWorkers.values()].at(-1);
     if (!worker) return;
     this.emitNoticeText("Security · forwarding follow-up to the latest live worker");
-    await worker.prompt(text);
+    try {
+      await worker.prompt(text);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Security follow-up was not delivered");
+      this.emitNoticeText(
+        `Security · follow-up was not delivered: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async ensureManager(): Promise<AgentSession> {
@@ -990,7 +998,8 @@ function promptText(prompt: AgentPromptInput): string {
 
 function isCampaignGoal(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.length > 0 && !trimmed.startsWith("/");
+  if (trimmed.length === 0 || trimmed.startsWith("/")) return false;
+  return !isSystemInjectedEnvelope(trimmed);
 }
 
 async function readProviderModes(
