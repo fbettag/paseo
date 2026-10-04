@@ -1899,6 +1899,11 @@ export const es: TranslationResources = {
       openFinding: "Abrir {{title}}",
       openWorker: "Abrir {{label}}",
       emptyFindings: "Aún no hay hallazgos",
+      search: "Buscar hallazgos",
+      showEarlier: "Anteriores ({{count}})",
+      hideEarlier: "Ocultar anteriores",
+      chain: "Cadena: {{chain}}",
+      also: "También reportado: {{models}}",
     },
   },
   panels: {

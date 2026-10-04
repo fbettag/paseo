@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -653,12 +656,15 @@ describe("SecurityAgentClient", () => {
     await session.startTurn("scan the engagement");
     await session.startTurn("also check auth");
     expect(harness.children).toHaveLength(0);
-    harness.sessions[0]?.completeTurn("read the vercel headers first");
+    harness.sessions[0]?.completeTurn(
+      "The fleet is this session.\n:::worker-brief\nread the vercel headers first\n:::",
+    );
     await waitFor(() => harness.children.length === 2);
     const prompt = harness.children[0]?.initialPrompt ?? "";
     expect(prompt).toContain("scan the engagement");
     expect(prompt).toContain("also check auth");
-    expect(prompt).toContain("Manager brief:\nread the vercel headers first");
+    expect(prompt).toContain("Worker assignment:\nread the vercel headers first");
+    expect(prompt).not.toContain("The fleet is this session");
   });
 
   it("starts the next fleet after the operator stops the manager", async () => {
@@ -677,11 +683,14 @@ describe("SecurityAgentClient", () => {
     harness.sessions[0]?.cancelTurn();
     expect(harness.children).toHaveLength(0);
     await session.startTurn("actually its firecracker");
-    harness.sessions[0]?.completeTurn("audit the jailer");
+    harness.sessions[0]?.completeTurn(
+      "No separate workers yet.\n:::worker-brief\naudit the jailer\n:::",
+    );
     await waitFor(() => harness.children.length === 2);
     const prompt = harness.children[0]?.initialPrompt ?? "";
     expect(prompt).toContain("actually its firecracker");
-    expect(prompt).toContain("Manager brief:\naudit the jailer");
+    expect(prompt).toContain("Worker assignment:\naudit the jailer");
+    expect(prompt).not.toContain("No separate workers yet");
     expect(prompt).not.toContain("scan vercel");
   });
 
@@ -702,7 +711,7 @@ describe("SecurityAgentClient", () => {
     await waitFor(() => harness.children.length === 2);
     const prompt = harness.children[0]?.initialPrompt ?? "";
     expect(prompt).toContain("scan the engagement");
-    expect(prompt).not.toContain("Manager brief:");
+    expect(prompt).not.toContain("Worker assignment:");
   });
 
   it("starts one quiet worker at a time", async () => {
@@ -746,8 +755,181 @@ describe("SecurityAgentClient", () => {
     expect(campaignComplete(last)).toBe(true);
     expect(last).toMatchObject({ total: 2, pace: "quiet", complete: true });
   });
+
+  it("splits a source audit into disjoint slices and shares the ledger", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paseo-security-split-"));
+    for (const name of ["alpha", "beta", "gamma", "delta"]) {
+      await mkdir(join(root, "omarchy", "src", name), { recursive: true });
+    }
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      ...FLEET,
+      maxParallel: 2,
+    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: root,
+        model: "grok/grok-4.6",
+        title: "omarchy",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("audit the omarchy source");
+    await waitFor(() => harness.children.length === 2);
+    const slices = harness.children.map((child) => slicePaths(child.initialPrompt));
+    const left = slices[0] ?? [];
+    const right = slices[1] ?? [];
+    expect(left.length).toBeGreaterThan(0);
+    expect(right.length).toBeGreaterThan(0);
+    expect(left.filter((path) => right.includes(path))).toEqual([]);
+    expect(new Set([...left, ...right])).toEqual(
+      new Set(["omarchy/src/alpha", "omarchy/src/beta", "omarchy/src/gamma", "omarchy/src/delta"]),
+    );
+    const ledgerPath = join(root, ".paseo", "security-ledger-security-parent.md");
+    expect(harness.children[0]?.initialPrompt).toContain(`Ledger: ${ledgerPath}`);
+    expect(harness.children.every((child) => child.prompts.length === 0)).toBe(true);
+    const ledger = await readFile(ledgerPath, "utf8");
+    expect(ledger).toContain("Already filed");
+  });
+
+  it("does not split a live target across workers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paseo-security-live-"));
+    for (const name of ["alpha", "beta", "gamma", "delta"]) {
+      await mkdir(join(root, "omarchy", "src", name), { recursive: true });
+    }
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      ...FLEET,
+      maxParallel: 2,
+    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: root,
+        model: "grok/grok-4.6",
+        title: "omarchy",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("evaluate against the remote omarchy target");
+    await waitFor(() => harness.children.length === 1);
+    expect(harness.children).toHaveLength(1);
+    expect(harness.children[0]?.initialPrompt).not.toContain("Search only these paths");
+    expect(harness.children[0]?.initialPrompt).toContain("Ledger:");
+  });
+
+  it("builds the finding board once from the current findings", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paseo-security-board-"));
+    const findingDir = join(root, "omarchy", "research", "review", "findings");
+    await mkdir(findingDir, { recursive: true });
+    await writeFile(
+      join(findingDir, "O-01.md"),
+      [
+        "# Reset path leak",
+        "",
+        "Status: chained, reported",
+        "",
+        "The balloon stays mapped across reset.",
+      ].join("\n"),
+    );
+    await writeFile(
+      join(findingDir, "O-14.md"),
+      [
+        "# Theme lock",
+        "",
+        "Status: source-only, no candidate above the reporting bar.",
+        "",
+        "Nothing here.",
+      ].join("\n"),
+    );
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      ...FLEET,
+      maxParallel: 2,
+    });
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: root,
+        model: "grok/grok-4.6",
+        title: "omarchy",
+      },
+      PARENT_LAUNCH,
+    );
+    const started = session.startTurn("audit the omarchy source");
+    await waitFor(() => childTitled(harness.children, "security board"));
+    childByTitle(harness.children, "security board")?.finish();
+    await started;
+    await waitFor(() => childPrefixed(harness.children, "Security ·"));
+    const boardChild = childByTitle(harness.children, "security board");
+    expect(boardChild?.initialPrompt).toContain("chained, reported");
+    expect(boardChild?.initialPrompt).not.toContain("The balloon stays mapped");
+    const board = await readFile(join(root, ".paseo", "security-board-security-parent.md"), "utf8");
+    expect(board).toContain(
+      "chained, reported | Reset path leak | omarchy/research/review/findings/O-01.md",
+    );
+    expect(board).toContain("open | Theme lock | omarchy/research/review/findings/O-14.md");
+    expect(board).not.toContain("The balloon stays mapped");
+    const managerPrompt = harness.sessions[0]?.prompts[0] ?? "";
+    expect(managerPrompt).toContain("Finding board:");
+    expect(managerPrompt).not.toContain("The balloon stays mapped");
+    const worker = childByPrefix(harness.children, "Security ·");
+    expect(worker?.initialPrompt).toContain("chained, reported | Reset path leak");
+    expect(worker?.initialPrompt).not.toContain("The balloon stays mapped");
+    await session.startTurn("audit the omarchy source again");
+    expect(countTitled(harness.children, "security board")).toBe(1);
+  });
 });
+
+function childTitled(children: ReadonlyArray<{ title: string }>, title: string): boolean {
+  return countTitled(children, title) > 0;
+}
+
+function countTitled(children: ReadonlyArray<{ title: string }>, title: string): number {
+  let count = 0;
+  for (const child of children) {
+    if (child.title === title) count += 1;
+  }
+  return count;
+}
+
+function childPrefixed(children: ReadonlyArray<{ title: string }>, prefix: string): boolean {
+  return childByPrefix(children, prefix) !== undefined;
+}
+
+function childByTitle<T extends { title: string }>(
+  children: readonly T[],
+  title: string,
+): T | undefined {
+  for (const child of children) {
+    if (child.title === title) return child;
+  }
+  return undefined;
+}
+
+function childByPrefix<T extends { title: string }>(
+  children: readonly T[],
+  prefix: string,
+): T | undefined {
+  for (const child of children) {
+    if (child.title.startsWith(prefix)) return child;
+  }
+  return undefined;
+}
 
 function campaignComplete(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && (value as { complete?: boolean }).complete);
+}
+
+function slicePaths(prompt: string): string[] {
+  const lines = prompt.split("\n");
+  const start = lines.findIndex((line) => line.startsWith("Search only these paths"));
+  if (start < 0) return [];
+  const paths: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    if (!line.startsWith("- ")) break;
+    paths.push(line.slice(2));
+  }
+  return paths;
 }

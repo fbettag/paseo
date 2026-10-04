@@ -1876,6 +1876,11 @@ export const en = {
       openFinding: "Open {{title}}",
       openWorker: "Open {{label}}",
       emptyFindings: "No findings yet",
+      search: "Search findings",
+      showEarlier: "Earlier ({{count}})",
+      hideEarlier: "Hide earlier",
+      chain: "Chain: {{chain}}",
+      also: "Also filed: {{models}}",
     },
   },
   panels: {

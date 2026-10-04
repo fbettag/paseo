@@ -1884,6 +1884,11 @@ export const ptBR: TranslationResources = {
       openFinding: "Abrir {{title}}",
       openWorker: "Abrir {{label}}",
       emptyFindings: "Nenhum achado ainda",
+      search: "Buscar achados",
+      showEarlier: "Anteriores ({{count}})",
+      hideEarlier: "Ocultar anteriores",
+      chain: "Cadeia: {{chain}}",
+      also: "Também reportado: {{models}}",
     },
   },
   panels: {

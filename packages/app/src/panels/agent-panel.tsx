@@ -73,13 +73,14 @@ import {
 } from "@/screens/agent/agent-ready-screen-bottom-anchor";
 import { WorkspaceDraftAgentTab } from "@/composer/draft/workspace-tab";
 import { AgentTracks, hasAgentTracks } from "@/panels/agent-tracks";
-import { parseCampaignSnapshot } from "@/security/campaign-snapshot";
+import { campaignKeepsParentActive, parseCampaignSnapshot } from "@/security/campaign-snapshot";
 import { useCreateFlowStore } from "@/stores/create-flow-store";
 import { buildDraftStoreKey, generateDraftId } from "@/stores/draft-keys";
 import {
   selectAgentTimelineState,
   selectAgentTurnPresentation,
   type Agent,
+  type SessionState,
   useSessionStore,
 } from "@/stores/session-store";
 import { useWorkspaceLayoutStore } from "@/stores/workspace-layout-store";
@@ -322,25 +323,36 @@ function storeFetchedAgentDetail(input: {
   return hydrated;
 }
 
+function agentPanelDescriptor(session: SessionState | undefined, agentId: string) {
+  const agent = panelAgent(session, agentId);
+  return {
+    ...panelAgentFields(agent),
+    isTurnActive: selectAgentTurnPresentation(session, agentId).isActive,
+    fleetActive: campaignKeepsParentActive(agent?.runtimeInfo?.extra?.campaign),
+  };
+}
+
+function panelAgent(session: SessionState | undefined, agentId: string): Agent | null {
+  return session?.agents.get(agentId) ?? session?.agentDetails.get(agentId) ?? null;
+}
+
+function panelAgentFields(agent: Agent | null) {
+  return {
+    provider: agent?.provider ?? "codex",
+    title: agent?.title ?? null,
+    status: agent?.status ?? null,
+    pendingPermissionCount: agent?.pendingPermissions.length ?? 0,
+    requiresAttention: agent?.requiresAttention ?? false,
+    attentionReason: agent?.attentionReason ?? null,
+  };
+}
+
 function useAgentPanelDescriptor(
   target: { kind: "agent"; agentId: string },
   context: { serverId: string },
 ): PanelDescriptor {
   const descriptorState = useSessionStore(
-    useShallow((state) => {
-      const session = state.sessions[context.serverId];
-      const agent =
-        session?.agents?.get(target.agentId) ?? session?.agentDetails?.get(target.agentId) ?? null;
-      return {
-        provider: agent?.provider ?? "codex",
-        title: agent?.title ?? null,
-        status: agent?.status ?? null,
-        pendingPermissionCount: agent?.pendingPermissions.length ?? 0,
-        requiresAttention: agent?.requiresAttention ?? false,
-        attentionReason: agent?.attentionReason ?? null,
-        isTurnActive: selectAgentTurnPresentation(session, target.agentId).isActive,
-      };
-    }),
+    useShallow((state) => agentPanelDescriptor(state.sessions[context.serverId], target.agentId)),
   );
   const provider = descriptorState.provider;
   const label = resolveWorkspaceAgentTabLabel(descriptorState.title);
@@ -354,7 +366,10 @@ function useAgentPanelDescriptor(
     icon,
     statusBucket: descriptorState.status
       ? deriveSidebarStateBucket({
-          status: descriptorState.isTurnActive ? "running" : descriptorState.status,
+          status:
+            descriptorState.isTurnActive || descriptorState.fleetActive
+              ? "running"
+              : descriptorState.status,
           pendingPermissionCount: descriptorState.pendingPermissionCount,
           requiresAttention: descriptorState.requiresAttention,
           attentionReason: descriptorState.attentionReason,

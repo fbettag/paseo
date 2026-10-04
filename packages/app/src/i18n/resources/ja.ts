@@ -1870,6 +1870,11 @@ export const ja: TranslationResources = {
       openFinding: "{{title}}を開く",
       openWorker: "{{label}}を開く",
       emptyFindings: "まだ指摘はありません",
+      search: "指摘を検索",
+      showEarlier: "以前の指摘 ({{count}})",
+      hideEarlier: "以前の指摘を隠す",
+      chain: "チェーン: {{chain}}",
+      also: "他の報告: {{models}}",
     },
   },
   panels: {

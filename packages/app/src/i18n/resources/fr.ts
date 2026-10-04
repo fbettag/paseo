@@ -1903,6 +1903,11 @@ export const fr: TranslationResources = {
       openFinding: "Ouvrir {{title}}",
       openWorker: "Ouvrir {{label}}",
       emptyFindings: "Aucun constat pour le moment",
+      search: "Rechercher des constats",
+      showEarlier: "Plus anciens ({{count}})",
+      hideEarlier: "Masquer les plus anciens",
+      chain: "Chaîne : {{chain}}",
+      also: "Aussi signalé : {{models}}",
     },
   },
   panels: {

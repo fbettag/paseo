@@ -1883,6 +1883,11 @@ export const ru: TranslationResources = {
       openFinding: "Открыть {{title}}",
       openWorker: "Открыть {{label}}",
       emptyFindings: "Пока нет находок",
+      search: "Поиск находок",
+      showEarlier: "Ранее ({{count}})",
+      hideEarlier: "Скрыть ранние",
+      chain: "Цепочка: {{chain}}",
+      also: "Также нашли: {{models}}",
     },
   },
   panels: {

@@ -47,7 +47,7 @@ export interface RunCampaignInput {
   workerPrompt: (item: CampaignItem, goal: string) => string;
   signal: AbortSignal;
   ports: CampaignPorts;
-  onReport?: (report: CampaignReport) => void;
+  onReport?: (report: CampaignReport) => void | Promise<void>;
   onStart?: (item: CampaignItem) => void;
 }
 
@@ -160,7 +160,7 @@ export async function runCampaign(input: RunCampaignInput): Promise<CampaignRepo
       if (!item) return;
       const report = await runOne(item, input, skippedModels, starter);
       reports.push(report);
-      input.onReport?.(report);
+      await input.onReport?.(report);
     }
   });
   await Promise.all(workers);

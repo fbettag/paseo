@@ -1861,6 +1861,11 @@ export const ko: TranslationResources = {
       openFinding: "{{title}} 열기",
       openWorker: "{{label}} 열기",
       emptyFindings: "아직 발견 없음",
+      search: "발견 검색",
+      showEarlier: "이전 ({{count}})",
+      hideEarlier: "이전 숨기기",
+      chain: "체인: {{chain}}",
+      also: "함께 보고: {{models}}",
     },
   },
   panels: {

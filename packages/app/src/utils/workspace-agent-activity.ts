@@ -1,3 +1,4 @@
+import { campaignKeepsParentActive } from "@/security/campaign-snapshot";
 import type { Agent, WorkspaceDescriptor } from "@/stores/session-store";
 import { isWorkspaceRootAgent } from "@/subagents/policies";
 import { deriveSidebarStateBucket } from "./sidebar-agent-state";
@@ -10,6 +11,7 @@ export interface WorkspaceAgentActivity {
 
 function workspaceAgentStatus(agent: Agent): Agent["status"] {
   if (agent.turn.phase === "open") return "running";
+  if (campaignKeepsParentActive(agent.runtimeInfo?.extra?.campaign)) return "running";
   return agent.status === "running" ? "idle" : agent.status;
 }
 

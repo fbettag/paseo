@@ -1,6 +1,8 @@
 import type { CampaignItem } from "./campaign.js";
-import type { FindingCard } from "./findings.js";
+import type { FindingAlsoFound, FindingCard } from "./findings.js";
 import type { SecurityPace } from "./settings.js";
+
+const MIN_TITLE_KEY = 12;
 
 export const CAMPAIGN_WORKER_STATES = [
   "queued",
@@ -38,6 +40,7 @@ export interface CampaignSnapshot {
   findings: CampaignFinding[];
   complete: boolean;
   pace: SecurityPace;
+  scopes: string[];
 }
 
 export function queuedWorkers(items: readonly CampaignItem[]): CampaignWorkerSnapshot[] {
@@ -54,12 +57,14 @@ export function queuedWorkers(items: readonly CampaignItem[]): CampaignWorkerSna
 export function createCampaignSnapshot(
   items: readonly CampaignItem[],
   pace: SecurityPace,
+  scopes: readonly string[] = [],
 ): CampaignSnapshot {
   return tallyCampaign({
     workers: queuedWorkers(items),
     findings: [],
     complete: false,
     pace,
+    scopes,
   });
 }
 
@@ -68,6 +73,7 @@ export function tallyCampaign(input: {
   findings: CampaignFinding[];
   complete: boolean;
   pace: SecurityPace;
+  scopes?: readonly string[];
 }): CampaignSnapshot {
   let queued = 0;
   let running = 0;
@@ -93,6 +99,7 @@ export function tallyCampaign(input: {
     findings: input.findings,
     complete: input.complete,
     pace: input.pace,
+    scopes: [...(input.scopes ?? [])],
   };
 }
 
@@ -104,7 +111,7 @@ export function patchCampaignWorker(
   const workers = snapshot.workers.map((worker) =>
     worker.key === key ? { ...worker, ...patch } : worker,
   );
-  return tallyCampaign({ ...snapshot, workers });
+  return tallyCampaign({ ...snapshot, workers, scopes: snapshot.scopes });
 }
 
 export function appendCampaignFindings(
@@ -112,8 +119,78 @@ export function appendCampaignFindings(
   findings: readonly CampaignFinding[],
 ): CampaignSnapshot {
   if (findings.length === 0) return snapshot;
+  const merged = [...snapshot.findings];
+  for (const finding of findings) {
+    const index = merged.findIndex((existing) => sameFinding(existing, finding));
+    if (index < 0) {
+      merged.push(finding);
+      continue;
+    }
+    const previous = merged[index];
+    if (!previous) continue;
+    merged[index] = mergeFinding(previous, finding);
+  }
   return tallyCampaign({
     ...snapshot,
-    findings: [...snapshot.findings, ...findings].slice(-MAX_CAMPAIGN_FINDINGS),
+    findings: merged.slice(-MAX_CAMPAIGN_FINDINGS),
+    scopes: snapshot.scopes,
   });
+}
+
+function sameFinding(left: CampaignFinding, right: CampaignFinding): boolean {
+  if (left.relativePath === right.relativePath) return true;
+  if (left.alsoFoundBy?.some((item) => item.relativePath === right.relativePath)) return true;
+  const leftKey = findingTitleKey(left.title);
+  const rightKey = findingTitleKey(right.title);
+  return leftKey !== null && leftKey === rightKey;
+}
+
+function mergeFinding(previous: CampaignFinding, incoming: CampaignFinding): CampaignFinding {
+  const samePath = previous.relativePath === incoming.relativePath;
+  if (samePath) {
+    return {
+      ...incoming,
+      prior: previous.prior === true && incoming.prior === true,
+      providerId: incoming.providerId ?? previous.providerId,
+      modelId: incoming.modelId ?? previous.modelId,
+      ...(previous.alsoFoundBy ? { alsoFoundBy: previous.alsoFoundBy } : {}),
+    };
+  }
+  const incomingRicher = incoming.summary.length > previous.summary.length;
+  const primary = incomingRicher ? incoming : previous;
+  const secondary = incomingRicher ? previous : incoming;
+  return {
+    ...primary,
+    prior: previous.prior === true && incoming.prior === true,
+    alsoFoundBy: mergeAlsoFound(primary, secondary),
+  };
+}
+
+function mergeAlsoFound(primary: CampaignFinding, secondary: CampaignFinding): FindingAlsoFound[] {
+  const items: FindingAlsoFound[] = [
+    ...(primary.alsoFoundBy ?? []),
+    ...(secondary.alsoFoundBy ?? []),
+    {
+      relativePath: secondary.relativePath,
+      ...(secondary.providerId ? { providerId: secondary.providerId } : {}),
+      ...(secondary.modelId ? { modelId: secondary.modelId } : {}),
+    },
+  ];
+  const seen = new Set<string>();
+  const unique: FindingAlsoFound[] = [];
+  for (const item of items) {
+    if (item.relativePath === primary.relativePath || seen.has(item.relativePath)) continue;
+    seen.add(item.relativePath);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function findingTitleKey(title: string): string | null {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (normalized.length < MIN_TITLE_KEY) return null;
+  return normalized;
 }

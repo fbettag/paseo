@@ -1830,6 +1830,11 @@ export const zhCN: TranslationResources = {
       openFinding: "打开 {{title}}",
       openWorker: "打开 {{label}}",
       emptyFindings: "暂无发现",
+      search: "搜索发现",
+      showEarlier: "更早 ({{count}})",
+      hideEarlier: "隐藏更早",
+      chain: "链: {{chain}}",
+      also: "同时报告: {{models}}",
     },
   },
   panels: {
