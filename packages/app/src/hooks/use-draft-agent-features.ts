@@ -9,7 +9,7 @@ import {
   featureValueUpdates,
   pruneFeatureValues,
   resolveFeatureValues,
-  stepperPersistencePatch,
+  featurePersistencePatch,
   withParallelPreference,
 } from "./feature-preferences";
 
@@ -124,7 +124,7 @@ export function useDraftAgentFeatures(input: {
 
   const effectiveFeatureValues = Object.keys(featureValues).length > 0 ? featureValues : undefined;
   useEffect(() => {
-    const patch = stepperPersistencePatch(features, featureValues);
+    const patch = featurePersistencePatch(features, featureValues);
     if (!patch) return;
     setLocalFeatureValues((current) => ({ ...current, ...patch }));
     if (!provider) return;

@@ -241,6 +241,7 @@ const PROVIDER_CLIENT_FACTORIES: Record<string, ProviderClientFactory> = {
     new OpenCodeRuntimeClient(logger, runtimeSettings, {
       managedProcesses: options?.managedProcesses,
       bridge: options?.openCodeBridge,
+      customProvider: options?.customProvider,
     }),
   pi: (logger, runtimeSettings, options) =>
     new PiRpcAgentClient({

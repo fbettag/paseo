@@ -48,6 +48,7 @@ interface V2AgentOptions {
   managedProcesses?: ManagedProcessRegistry;
   bridge?: OpenCodeBridge;
   runtime?: Pick<V2Runtime, "acquire" | "shutdown">;
+  catalogProviderId?: string;
 }
 
 export class OpenCodeV2AgentClient implements AgentClient {
@@ -112,7 +113,9 @@ export class OpenCodeV2AgentClient implements AgentClient {
         location: { directory: config.cwd },
         title: config.title,
         agent: config.modeId ?? "build",
-        model: config.model ? modelRef(config.model, config.thinkingOptionId) : undefined,
+        model: config.model
+          ? modelRef(config.model, config.thinkingOptionId, this.options.catalogProviderId)
+          : undefined,
         permissions: permissionRules(config),
       });
       return await this.attach(connection, info, config, launch, options?.persistSession !== false);
@@ -144,7 +147,12 @@ export class OpenCodeV2AgentClient implements AgentClient {
       const info = await connection.client.session.get({
         sessionID: handle.nativeHandle ?? handle.sessionId,
       });
-      await applyResumeOverrides(connection.client, info, overrides);
+      await applyResumeOverrides(
+        connection.client,
+        info,
+        overrides,
+        this.options.catalogProviderId,
+      );
       return await this.attach(connection, info, config, launch, true);
     } catch (error) {
       await connection.release();
@@ -202,6 +210,7 @@ export class OpenCodeV2AgentClient implements AgentClient {
       bindChild,
       acquire,
       moved,
+      this.options.catalogProviderId,
     );
     try {
       if (this.options.bridge) {

@@ -3,6 +3,7 @@ import type { AgentFeature } from "@getpaseo/protocol/agent-types";
 
 import {
   applyFeatureValues,
+  featurePersistencePatch,
   featureValueUpdates,
   resolveFeatureValues,
   stepperPersistencePatch,
@@ -64,7 +65,10 @@ const slots: AgentFeature = {
   id: "slots",
   label: "Subagent models",
   value: [{ model: "grok/grok-4.6", replicas: 2 }],
-  options: [],
+  options: [
+    { id: "grok/grok-4.6", label: "Grok · Grok 4.6" },
+    { id: "glm/glm-5.3-flash", label: "GLM · GLM Flash" },
+  ],
   minReplicas: 1,
   maxReplicas: 8,
 };
@@ -98,6 +102,36 @@ describe("applyFeatureValues", () => {
     expect(features.find((feature) => feature.id === "parallel")).toMatchObject({
       value: 2,
       max: 2,
+    });
+  });
+
+  it("drops a stored slot that is not an exact option id", () => {
+    const features = applyFeatureValues([slots, parallel], {
+      slots: [
+        { model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 },
+        { model: "grok/grok-4.6", replicas: 1 },
+      ],
+      parallel: 4,
+    });
+    const shown = features.find((feature) => feature.id === "slots");
+    expect(shown?.type).toBe("slots");
+    if (shown?.type !== "slots") throw new Error("Expected slots feature");
+    expect(shown.value).toEqual([{ model: "grok/grok-4.6", replicas: 1 }]);
+    expect(features.find((feature) => feature.id === "parallel")).toMatchObject({
+      value: 1,
+      max: 1,
+    });
+    expect(
+      featurePersistencePatch(features, {
+        slots: [
+          { model: "orcarouter/orcarouter/orcarouter/free", replicas: 2 },
+          { model: "grok/grok-4.6", replicas: 1 },
+        ],
+        parallel: 4,
+      }),
+    ).toEqual({
+      slots: [{ model: "grok/grok-4.6", replicas: 1 }],
+      parallel: 1,
     });
   });
 

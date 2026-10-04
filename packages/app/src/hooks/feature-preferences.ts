@@ -48,6 +48,12 @@ function overlayFeature(
   featureValues: Record<string, unknown>,
 ): AgentFeature {
   if (Object.prototype.hasOwnProperty.call(featureValues, feature.id)) {
+    if (feature.type === "slots" && feature.options.length > 0) {
+      return {
+        ...feature,
+        value: slotsMatchingOptions(featureValues[feature.id], feature.options),
+      };
+    }
     return {
       ...feature,
       value: featureValues[feature.id],
@@ -114,6 +120,71 @@ export function featureValueUpdates(
     if (feature.value > limit) updates[feature.id] = limit;
   }
   return updates;
+}
+
+export function slotsMatchingOptions(
+  value: unknown,
+  options: readonly { id: string }[],
+): AgentFeatureSlotValue[] {
+  const parsed = parseSlotList(value);
+  if (options.length === 0) return parsed;
+  const allowed = new Set(options.map((option) => option.id));
+  return parsed.filter((slot) => allowed.has(slot.model));
+}
+
+function readSlot(entry: unknown): AgentFeatureSlotValue | null {
+  if (!entry || typeof entry !== "object") return null;
+  const record = entry as { model?: unknown; replicas?: unknown };
+  if (typeof record.model !== "string" || record.model.length === 0) return null;
+  if (
+    typeof record.replicas !== "number" ||
+    !Number.isInteger(record.replicas) ||
+    record.replicas < 1
+  ) {
+    return null;
+  }
+  return { model: record.model, replicas: record.replicas };
+}
+
+function parseSlotList(value: unknown): AgentFeatureSlotValue[] {
+  if (!Array.isArray(value)) return [];
+  const slots: AgentFeatureSlotValue[] = [];
+  for (const entry of value) {
+    const slot = readSlot(entry);
+    if (slot) slots.push(slot);
+  }
+  return slots;
+}
+
+function sameSlotList(stored: unknown, value: readonly AgentFeatureSlotValue[]): boolean {
+  const parsed = parseSlotList(stored);
+  if (parsed.length !== value.length) return false;
+  return parsed.every(
+    (slot, index) => slot.model === value[index]?.model && slot.replicas === value[index]?.replicas,
+  );
+}
+
+export function slotsPersistencePatch(
+  features: readonly AgentFeature[],
+  featureValues: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const slotsFeature = features.find((feature) => feature.type === "slots");
+  if (!slotsFeature || slotsFeature.type !== "slots" || slotsFeature.options.length === 0) {
+    return null;
+  }
+  if (!Object.prototype.hasOwnProperty.call(featureValues, slotsFeature.id)) return null;
+  if (sameSlotList(featureValues[slotsFeature.id], slotsFeature.value)) return null;
+  return { [slotsFeature.id]: slotsFeature.value };
+}
+
+export function featurePersistencePatch(
+  features: readonly AgentFeature[],
+  featureValues: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const stepper = stepperPersistencePatch(features, featureValues);
+  const slots = slotsPersistencePatch(features, featureValues);
+  if (!stepper && !slots) return null;
+  return { ...stepper, ...slots };
 }
 
 export function stepperPersistencePatch(

@@ -50,6 +50,7 @@ export async function applyResumeOverrides(
   client: V2Api,
   info: SessionInfo,
   overrides?: Partial<AgentSessionConfig>,
+  catalogProviderId?: string,
 ) {
   if (overrides?.modeId) {
     await client.session.switchAgent({
@@ -60,7 +61,11 @@ export async function applyResumeOverrides(
   }
   if (overrides?.model || overrides?.thinkingOptionId !== undefined) {
     const model = overrides.model
-      ? modelRef(overrides.model, overrides.thinkingOptionId ?? info.model?.variant)
+      ? modelRef(
+          overrides.model,
+          overrides.thinkingOptionId ?? info.model?.variant,
+          catalogProviderId,
+        )
       : info.model && { ...info.model, variant: overrides.thinkingOptionId };
     if (!model) throw new Error("Select an OpenCode model before changing its variant");
     await client.session.switchModel({ sessionID: info.id, model });

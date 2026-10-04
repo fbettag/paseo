@@ -105,7 +105,9 @@ const SECURITY_MODES: AgentMode[] = [
 
 const MANAGER_SYSTEM_PROMPT = [
   "You are the Security campaign manager.",
-  "The worker fleet is owned by this provider and starts on the operator's campaign goal.",
+  "Read the operator's campaign goal and the engagement before any worker starts.",
+  "This turn is the worker brief. Write the worker instructions in your reply.",
+  "The worker fleet is owned by this provider and starts after this turn, using that brief.",
   "Workers appear as native Paseo subagents of this session.",
   "Do not call create_agent for that fleet.",
   "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices and as subagent activity.",
@@ -173,7 +175,11 @@ export class SecurityAgentClient {
 
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
     const candidates = await this.readCandidates(config.cwd);
-    const slots = resolveSessionSlots(config.featureValues, this.params.slots);
+    const slots = launchSlots(
+      config.featureValues,
+      this.params.slots,
+      optionIdSet(slotOptions(candidates)),
+    );
     const schedule = resolveSessionSchedule(config.featureValues, this.params, slots);
     return [
       buildSlotsFeature(slots, slotOptions(candidates)),
@@ -219,11 +225,12 @@ export class SecurityAgentClient {
       options,
     );
     const candidates = await this.readCandidates(cwd);
-    const resumedSlots = routed.slots ?? this.params.slots;
     const resumedFeatureValues: Record<string, unknown> = {
       ...overrides?.featureValues,
-      [SECURITY_SLOTS_FEATURE_ID]: resumedSlots,
     };
+    if (routed.slots !== null) {
+      resumedFeatureValues[SECURITY_SLOTS_FEATURE_ID] = routed.slots;
+    }
     if (routed.parallel !== null) {
       resumedFeatureValues[SECURITY_PARALLEL_FEATURE_ID] = routed.parallel;
     } else {
@@ -279,6 +286,9 @@ class SecurityAgentSession implements AgentSession {
   private campaign: CampaignSnapshot | null = null;
   private slots: SecuritySlot[];
   private schedule: ResolvedSecuritySchedule;
+  private pendingFleetGoal: string | null = null;
+  private readonly briefChunks = new Map<string, string>();
+  private briefOrder: string[] = [];
 
   constructor(
     private readonly logger: Logger,
@@ -289,7 +299,7 @@ class SecurityAgentSession implements AgentSession {
     private readonly launchContext?: AgentLaunchContext,
     private readonly createOptions?: AgentCreateSessionOptions,
   ) {
-    this.slots = resolveSessionSlots(config.featureValues, params.slots);
+    this.slots = launchSlots(config.featureValues, params.slots, optionIdSet(slotChoices));
     this.schedule = resolveSessionSchedule(config.featureValues, params, this.slots);
   }
 
@@ -336,7 +346,7 @@ class SecurityAgentSession implements AgentSession {
     prompt: AgentPromptInput,
     options: SteerActiveTurnOptions,
   ): Promise<SteerResult> {
-    this.forwardCampaignPrompt(prompt);
+    this.noteCampaignPrompt(prompt);
     const inner = this.inner;
     if (!inner?.steerActiveTurn) return { status: "unavailable" };
     return inner.steerActiveTurn(prompt, options);
@@ -402,7 +412,8 @@ class SecurityAgentSession implements AgentSession {
     if (featureId !== SECURITY_SLOTS_FEATURE_ID) {
       throw new Error(`Unknown Security feature '${featureId}'`);
     }
-    this.slots = resolveSessionSlots({ [SECURITY_SLOTS_FEATURE_ID]: value }, []);
+    const allowed = optionIdSet(this.slotChoices);
+    this.slots = parseSlotsFeatureValue(value).filter((slot) => allowed.has(slot.model));
     const featureValues: Record<string, unknown> = {
       ...this.config.featureValues,
       [SECURITY_SLOTS_FEATURE_ID]: this.slots,
@@ -499,8 +510,20 @@ class SecurityAgentSession implements AgentSession {
     options: AgentRunOptions | undefined,
   ): Promise<AgentRunResult> {
     const inner = await this.ensureManager();
-    this.forwardCampaignPrompt(prompt);
-    return inner.run(prompt, options);
+    this.noteCampaignPrompt(prompt);
+    try {
+      const result = await inner.run(prompt, options);
+      if (result.canceled) {
+        this.pendingFleetGoal = null;
+        this.resetBrief();
+        return result;
+      }
+      this.releaseAfterRun(result.finalText);
+      return result;
+    } catch (error) {
+      if (this.pendingFleetGoal !== null) this.releaseFleet(false);
+      throw error;
+    }
   }
 
   private async startPrompt(
@@ -508,11 +531,11 @@ class SecurityAgentSession implements AgentSession {
     options: AgentRunOptions | undefined,
   ): Promise<{ turnId: string }> {
     const inner = await this.ensureManager();
-    this.forwardCampaignPrompt(prompt);
+    this.noteCampaignPrompt(prompt);
     return inner.startTurn(prompt, options);
   }
 
-  private forwardCampaignPrompt(prompt: AgentPromptInput): void {
+  private noteCampaignPrompt(prompt: AgentPromptInput): void {
     const text = promptText(prompt);
     if (!isCampaignGoal(text)) return;
     if (this.fleetRunning && this.liveWorkers.size > 0) {
@@ -520,7 +543,70 @@ class SecurityAgentSession implements AgentSession {
       return;
     }
     if (this.fleetRunning) return;
-    this.startCampaign(text);
+    if (this.pendingFleetGoal !== null) {
+      this.pendingFleetGoal = `${this.pendingFleetGoal}\n${text}`;
+      return;
+    }
+    this.pendingFleetGoal = text;
+    this.resetBrief();
+  }
+
+  private releaseAfterRun(finalText: string): void {
+    if (this.pendingFleetGoal === null) return;
+    if (!this.currentBrief() && finalText.trim().length > 0) {
+      this.noteAssistantText(undefined, finalText);
+    }
+    this.releaseFleet(true);
+  }
+
+  private observeManagerEvent(event: AgentStreamEvent): void {
+    if (this.pendingFleetGoal === null) return;
+    if (event.type === "timeline" && event.item.type === "assistant_message") {
+      this.noteAssistantText(event.item.messageId, event.item.text);
+      return;
+    }
+    if (event.type === "turn_completed") {
+      this.releaseFleet(true);
+      return;
+    }
+    if (event.type === "turn_failed") {
+      this.releaseFleet(false);
+      return;
+    }
+    if (event.type === "turn_canceled") {
+      this.pendingFleetGoal = null;
+      this.resetBrief();
+    }
+  }
+
+  private releaseFleet(includeBrief: boolean): void {
+    const goal = this.pendingFleetGoal;
+    if (!goal || this.fleetRunning) return;
+    const brief = includeBrief ? this.currentBrief() : null;
+    this.pendingFleetGoal = null;
+    this.resetBrief();
+    this.startCampaign(brief ? `${goal}\n\nManager brief:\n${brief}` : goal);
+  }
+
+  private noteAssistantText(messageId: string | undefined, text: string): void {
+    const id = messageId ?? "";
+    if (!this.briefChunks.has(id)) this.briefOrder.push(id);
+    this.briefChunks.set(id, `${this.briefChunks.get(id) ?? ""}${text}`);
+  }
+
+  private currentBrief(): string | null {
+    const parts: string[] = [];
+    for (const id of this.briefOrder) {
+      const chunk = this.briefChunks.get(id) ?? "";
+      if (chunk.length > 0) parts.push(chunk);
+    }
+    const text = parts.join("\n").trim();
+    return text.length > 0 ? text : null;
+  }
+
+  private resetBrief(): void {
+    this.briefChunks.clear();
+    this.briefOrder = [];
   }
 
   private startCampaign(goal: string): void {
@@ -708,6 +794,7 @@ class SecurityAgentSession implements AgentSession {
     this.inner = inner;
     this.manager = manager;
     this.unsubscribeInner = inner.subscribe((event) => {
+      this.observeManagerEvent(event);
       const tagged = this.retag(event);
       if (tagged) this.emit(tagged);
     });
@@ -840,6 +927,25 @@ class SecurityAgentSession implements AgentSession {
     }
     return this.ports;
   }
+}
+
+function optionIdSet(options: readonly AgentSelectOption[]): ReadonlySet<string> {
+  return new Set(options.map((option) => option.id));
+}
+
+function launchSlots(
+  featureValues: Record<string, unknown> | undefined,
+  fallback: readonly SecuritySlot[],
+  optionIds: ReadonlySet<string>,
+): SecuritySlot[] {
+  const slots = resolveSessionSlots(featureValues, fallback);
+  if (
+    !featureValues ||
+    !Object.prototype.hasOwnProperty.call(featureValues, SECURITY_SLOTS_FEATURE_ID)
+  ) {
+    return slots;
+  }
+  return slots.filter((slot) => optionIds.has(slot.model));
 }
 
 function slotOptions(candidates: readonly EnabledModel[]): AgentSelectOption[] {
