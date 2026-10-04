@@ -8,6 +8,7 @@ import {
   listFindingFiles,
   parseFindingMarkdown,
   parseFindingPath,
+  resolveFindingScopes,
   summarizeFindingFile,
 } from "./findings.js";
 
@@ -49,12 +50,33 @@ describe("listFindingFiles", () => {
 
   it("reads title, severity, and summary from markdown", () => {
     expect(
-      parseFindingMarkdown("# Reflected XSS\n\nSeverity: high\n\nThe q parameter is reflected."),
+      parseFindingMarkdown(
+        "# Reflected XSS\n\nSeverity: high\n\nChain: reset then balloon\n\nThe q parameter is reflected.",
+      ),
     ).toEqual({
       title: "Reflected XSS",
       summary: "The q parameter is reflected.",
       severity: "high",
+      chain: "reset then balloon",
     });
+  });
+
+  it("keeps a session on the targets named in its goal", async () => {
+    const root = await mkdtemp(join(tmpdir(), "paseo-security-scopes-"));
+    await mkdir(join(root, "firecracker", "research", "review", "findings"), { recursive: true });
+    await mkdir(join(root, "omarchy", "research", "review", "findings"), { recursive: true });
+    await writeFile(join(root, "firecracker", "research", "review", "findings", "reset.md"), "# R");
+    await writeFile(join(root, "omarchy", "research", "review", "findings", "O-14.md"), "# O");
+    const scopes = resolveFindingScopes({
+      topLevel: ["firecracker", "omarchy", "engagements"],
+      engagements: ["firecracker"],
+      text: "continue the omarchy source audit",
+    });
+    expect(scopes).toEqual(["omarchy/", "engagements/omarchy/"]);
+    const files = await listFindingFiles(root, { scopes });
+    expect(files.map((file) => file.endsWith("O-14.md"))).toEqual([true]);
+    const closed = await listFindingFiles(root, { scopes: [] });
+    expect(closed).toEqual([]);
   });
 
   it("summarizes a finding file on disk", async () => {

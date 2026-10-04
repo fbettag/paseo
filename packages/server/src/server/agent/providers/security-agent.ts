@@ -1,3 +1,6 @@
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { dirname, relative } from "node:path";
+
 import type { Logger } from "pino";
 
 import type {
@@ -45,10 +48,25 @@ import {
 } from "../../security/campaign.js";
 import { classifyOrcaUsageSkip, UsageSkipError } from "../../security/usage-error.js";
 import {
+  boardBuilderPrompt,
+  boardEntryLines,
+  boardLooksWritten,
+  boardPathFor,
+  findingBoardStatus,
+  formatBoardEntry,
+  renderFindingBoard,
+  type FindingBoardEntry,
+} from "../../security/finding-board.js";
+import { ledgerLines, ledgerPathFor, renderFindingLedger } from "../../security/finding-ledger.js";
+import {
   FINDINGS_WATCH_MS,
   listFindingFiles,
+  resolveFindingScopes,
   summarizeFindingFile,
+  type FindingCard,
 } from "../../security/findings.js";
+import { campaignRunsLive } from "../../security/live-target.js";
+import { listSearchSlices, partitionSearchPaths } from "../../security/search-split.js";
 import {
   clampParallel,
   parsePace,
@@ -106,13 +124,19 @@ const SECURITY_MODES: AgentMode[] = [
 const MANAGER_SYSTEM_PROMPT = [
   "You are the Security campaign manager.",
   "Read the operator's campaign goal and the engagement before any worker starts.",
-  "This turn is the worker brief. Write the worker instructions in your reply.",
-  "The worker fleet is owned by this provider and starts after this turn, using that brief.",
+  "This turn is the worker brief.",
+  "Put only the worker assignment between :::worker-brief and :::.",
+  "Status updates, reconnaissance, and notes to the operator stay outside that block. Workers never see them.",
+  "The worker fleet is owned by this provider and starts after this turn, using that assignment.",
   "Workers appear as native Paseo subagents of this session.",
   "Do not call create_agent for that fleet.",
   "Do not claim workers are idle or missing while this session is open; fleet status arrives as Security notices and as subagent activity.",
   "Later operator messages are forwarded to the live fleet.",
   "Plan, read evidence, and brief the operator.",
+  "A fresh session builds the finding board once, in a subagent, from the current findings.",
+  "Read that board file only. Do not open the finding files into this chat.",
+  "Source-audit workers each receive a random disjoint slice of the target tree and a ledger of findings already filed.",
+  "Do not paste that board, that ledger, or those slices into the operator status.",
   "Severity decisions and report submission stay with the human.",
 ].join(" ");
 
@@ -120,8 +144,8 @@ const WORKER_SYSTEM_PROMPT = [
   "You are a Security campaign worker.",
   "Follow AGENTS.md in this workspace.",
   "Do not spawn further agents. The fleet is provider-owned.",
-  "Write findings only under engagements/<name>/out/<host>/findings/<class>/.",
-  "Do not edit application source or any file outside that out/ tree.",
+  "Do not edit application source.",
+  "Do not write findings for any other target.",
 ].join(" ");
 
 export function isWrapperProvider(providerId: string): boolean {
@@ -193,7 +217,7 @@ export class SecurityAgentClient {
     options?: AgentCreateSessionOptions,
   ): Promise<AgentSession> {
     const candidates = await this.readCandidates(config.cwd);
-    return new SecurityAgentSession(
+    const session = new SecurityAgentSession(
       this.logger,
       this.ports,
       this.params,
@@ -202,6 +226,8 @@ export class SecurityAgentClient {
       launchContext,
       options,
     );
+    session.armFreshBoard();
+    return session;
   }
 
   async resumeSession(
@@ -289,6 +315,20 @@ class SecurityAgentSession implements AgentSession {
   private pendingFleetGoal: string | null = null;
   private readonly briefChunks = new Map<string, string>();
   private briefOrder: string[] = [];
+  private operatorGoal = "";
+  private workerGoal = "";
+  private findingScopes: string[] = [];
+  private readonly findingSeen = new Set<string>();
+  private readonly findingCounts = new Map<string, number>();
+  private findingRefresh: Promise<void> = Promise.resolve();
+  private liveCampaign = false;
+  private searchSlices = new Map<string, string[]>();
+  private ledgerFile: string | null = null;
+  private boardArmed = false;
+  private boardBuilt = false;
+  private boardFile: string | null = null;
+  private boardLines: string[] = [];
+  private boardAbort = new AbortController();
 
   constructor(
     private readonly logger: Logger,
@@ -486,7 +526,12 @@ class SecurityAgentSession implements AgentSession {
     return this.inner?.tryHandleOutOfBand?.(prompt) ?? null;
   }
 
+  armFreshBoard(): void {
+    this.boardArmed = true;
+  }
+
   async interrupt(): Promise<void> {
+    this.boardAbort.abort();
     this.fleetAbort.abort();
     await Promise.allSettled([
       this.inner?.interrupt(),
@@ -495,6 +540,7 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async close(): Promise<void> {
+    this.boardAbort.abort();
     this.fleetAbort.abort();
     this.unsubscribeInner?.();
     this.unsubscribeInner = null;
@@ -511,8 +557,9 @@ class SecurityAgentSession implements AgentSession {
   ): Promise<AgentRunResult> {
     const inner = await this.ensureManager();
     this.noteCampaignPrompt(prompt);
+    const noted = await this.ensureBoard(prompt);
     try {
-      const result = await inner.run(prompt, options);
+      const result = await inner.run(noted, options);
       if (result.canceled) {
         this.pendingFleetGoal = null;
         this.resetBrief();
@@ -532,7 +579,8 @@ class SecurityAgentSession implements AgentSession {
   ): Promise<{ turnId: string }> {
     const inner = await this.ensureManager();
     this.noteCampaignPrompt(prompt);
-    return inner.startTurn(prompt, options);
+    const noted = await this.ensureBoard(prompt);
+    return inner.startTurn(noted, options);
   }
 
   private noteCampaignPrompt(prompt: AgentPromptInput): void {
@@ -585,7 +633,7 @@ class SecurityAgentSession implements AgentSession {
     const brief = includeBrief ? this.currentBrief() : null;
     this.pendingFleetGoal = null;
     this.resetBrief();
-    this.startCampaign(brief ? `${goal}\n\nManager brief:\n${brief}` : goal);
+    this.startCampaign(goal, brief);
   }
 
   private noteAssistantText(messageId: string | undefined, text: string): void {
@@ -609,12 +657,16 @@ class SecurityAgentSession implements AgentSession {
     this.briefOrder = [];
   }
 
-  private startCampaign(goal: string): void {
+  private startCampaign(goal: string, brief: string | null): void {
     this.fleetAbort = new AbortController();
     const signal = this.fleetAbort.signal;
     this.fleetRunning = true;
     this.campaignComplete = false;
-    void this.runFleet(goal, signal)
+    const assignment = extractWorkerBrief(brief);
+    this.operatorGoal = goal;
+    this.liveCampaign = campaignRunsLive(goal);
+    this.workerGoal = assignment ? `${goal}\n\nWorker assignment:\n${assignment}` : goal;
+    void this.runFleet(signal)
       .then((reports) => this.enqueue(() => this.synthesize(reports)))
       .catch((error) => {
         this.logger.warn({ err: error }, "Security campaign failed");
@@ -670,15 +722,29 @@ class SecurityAgentSession implements AgentSession {
     return inner;
   }
 
-  private async runFleet(goal: string, fleetSignal: AbortSignal): Promise<CampaignReport[]> {
+  private async runFleet(fleetSignal: AbortSignal): Promise<CampaignReport[]> {
     const ports = this.requirePorts();
     const manager = this.manager;
     const schedule = this.schedule;
     const items = expandSlots(this.slots, manager);
-    this.campaign = createCampaignSnapshot(items, schedule.pace);
+    this.findingScopes = await this.resolveFindingScopes(
+      [this.config.title, this.operatorGoal].filter((part) => part && part.length > 0).join("\n"),
+    );
+    this.findingSeen.clear();
+    this.findingCounts.clear();
+    this.searchSlices = new Map();
+    const agentId = this.launchContext?.agentId;
+    this.ledgerFile = agentId ? ledgerPathFor(this.config.cwd, agentId) : null;
+    const maxParallel = this.liveCampaign ? 1 : schedule.maxParallel;
+    const staggerMs = this.liveCampaign ? 0 : schedule.staggerMs;
+    this.campaign = createCampaignSnapshot(items, schedule.pace, this.findingScopes);
+    await this.assignSearchSlices(items);
+    await this.rememberPriorFindings();
     this.emitCampaign();
     this.emitNoticeText(
-      `Security · fleet ${items.length} workers, parallel ${schedule.maxParallel}`,
+      this.liveCampaign
+        ? `Security · fleet ${items.length} workers, one at a time`
+        : `Security · fleet ${items.length} workers, parallel ${maxParallel}`,
     );
     if (items.length === 0) {
       this.campaignComplete = true;
@@ -689,12 +755,12 @@ class SecurityAgentSession implements AgentSession {
     const reports = await runCampaign({
       slots: this.slots,
       fallback: manager,
-      maxParallel: schedule.maxParallel,
-      staggerMs: schedule.staggerMs,
+      maxParallel,
+      staggerMs,
       usageWaitMs: this.params.usageWaitMs,
       usagePollMs: this.params.usagePollMs,
-      goal,
-      workerPrompt,
+      goal: this.workerGoal,
+      workerPrompt: (item) => this.promptForWorker(item),
       signal: fleetSignal,
       ports: {
         blockedProviders: () => ports.blockedProviders(),
@@ -705,7 +771,7 @@ class SecurityAgentSession implements AgentSession {
       onStart: (item) => {
         this.patchWorker(item.key, { state: "running" });
       },
-      onReport: (report) => {
+      onReport: async (report) => {
         this.patchWorker(report.key, {
           state: reportStatusState(report.status),
           findingsCount: report.findingsCount,
@@ -716,6 +782,9 @@ class SecurityAgentSession implements AgentSession {
             workerNotice(report, "skipped-usage", report.findingsCount, report.error),
           );
         }
+        if (!this.liveCampaign || report.status !== "completed") return;
+        const next = await this.nextWorkerAssignment(report);
+        if (next) this.workerGoal = `${this.operatorGoal}\n\nWorker assignment:\n${next}`;
       },
     });
     if (this.campaign) {
@@ -752,13 +821,11 @@ class SecurityAgentSession implements AgentSession {
     this.liveWorkers.set(item.key, worker);
     this.lastLiveWorkerKey = item.key;
     this.patchWorker(item.key, { agentId: worker.agentId });
-    const baseline = new Set(await listFindingFiles(this.config.cwd));
-    const seen = new Set(baseline);
-    const watch = this.watchFindings(seen, signal);
+    const watch = this.watchFindings(item, signal);
     try {
       const result = await worker.waitForFinish(signal);
-      const after = await this.refreshFindings(seen);
-      const findingsCount = after.filter((path) => !baseline.has(path)).length;
+      await this.refreshFindings(item);
+      const findingsCount = this.findingCounts.get(item.key) ?? 0;
       this.emitNoticeText(workerNotice(item, "completed", findingsCount));
       return { text: result.text, findingsCount };
     } catch (error) {
@@ -839,14 +906,14 @@ class SecurityAgentSession implements AgentSession {
     });
   }
 
-  private watchFindings(seen: Set<string>, signal: AbortSignal): { stop(): void } {
+  private watchFindings(item: CampaignItem, signal: AbortSignal): { stop(): void } {
     const controller = new AbortController();
     const onParentAbort = () => controller.abort();
     if (signal.aborted) controller.abort();
     else signal.addEventListener("abort", onParentAbort, { once: true });
     const tick = async () => {
       while (!controller.signal.aborted) {
-        await this.refreshFindings(seen);
+        await this.refreshFindings(item);
         try {
           await defaultClock().sleep(FINDINGS_WATCH_MS, controller.signal);
         } catch {
@@ -863,17 +930,202 @@ class SecurityAgentSession implements AgentSession {
     };
   }
 
-  private async refreshFindings(seen: Set<string>): Promise<string[]> {
-    const files = await listFindingFiles(this.config.cwd);
-    const fresh = files.filter((path) => !seen.has(path));
-    for (const path of fresh) seen.add(path);
-    if (fresh.length === 0 || !this.campaign) return files;
-    const added = await Promise.all(
-      fresh.map((path) => summarizeFindingFile(path, this.config.cwd)),
+  private async refreshFindings(item?: CampaignItem): Promise<void> {
+    const run = this.findingRefresh.then(() => this.refreshFindingsLocked(item));
+    this.findingRefresh = run.then(
+      () => undefined,
+      () => undefined,
     );
+    await run;
+  }
+
+  private async refreshFindingsLocked(item?: CampaignItem): Promise<void> {
+    const files = await listFindingFiles(this.config.cwd, { scopes: this.findingScopes });
+    const fresh = files.filter((path) => !this.findingSeen.has(path));
+    for (const path of fresh) this.findingSeen.add(path);
+    if (fresh.length === 0 || !this.campaign) return;
+    const added: FindingCard[] = [];
+    for (const path of fresh) {
+      const card = await summarizeFindingFile(path, this.config.cwd);
+      if (item) {
+        card.providerId = item.providerId;
+        card.modelId = item.modelId;
+      }
+      added.push(card);
+    }
+    const before = this.campaign.findings.length;
     this.campaign = appendCampaignFindings(this.campaign, added);
+    const uniqueAdded = Math.max(0, this.campaign.findings.length - before);
+    if (item && uniqueAdded > 0) {
+      this.findingCounts.set(item.key, (this.findingCounts.get(item.key) ?? 0) + uniqueAdded);
+    }
+    await this.writeLedger();
     this.emitCampaign();
-    return files;
+  }
+
+  private async rememberPriorFindings(): Promise<void> {
+    const files = await listFindingFiles(this.config.cwd, { scopes: this.findingScopes });
+    const prior: FindingCard[] = [];
+    for (const path of files) {
+      this.findingSeen.add(path);
+      const card = await summarizeFindingFile(path, this.config.cwd);
+      card.prior = true;
+      prior.push(card);
+    }
+    if (prior.length > 0 && this.campaign) {
+      this.campaign = appendCampaignFindings(this.campaign, prior);
+    }
+    await this.writeLedger();
+  }
+
+  private async assignSearchSlices(items: readonly CampaignItem[]): Promise<void> {
+    this.searchSlices = new Map();
+    if (this.liveCampaign || items.length < 2) return;
+    const slices = await listSearchSlices(this.config.cwd, this.findingScopes, items.length);
+    const buckets = partitionSearchPaths(slices, items.length);
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const bucket = buckets[index];
+      if (item && bucket && bucket.length > 0) this.searchSlices.set(item.key, bucket);
+    }
+    if (this.searchSlices.size === 0) return;
+    let assigned = 0;
+    for (const bucket of this.searchSlices.values()) assigned += bucket.length;
+    this.emitNoticeText(
+      `Security · search split ${assigned} paths across ${this.searchSlices.size} workers`,
+    );
+  }
+
+  private promptForWorker(item: CampaignItem): string {
+    return workerPrompt(item, this.workerGoal, this.findingScopes, {
+      slice: this.searchSlices.get(item.key) ?? [],
+      filed: ledgerLines(this.campaign?.findings ?? []),
+      ledgerPath: this.ledgerFile,
+      boardPath: this.boardFile,
+      boardLines: this.boardLines,
+    });
+  }
+
+  private async ensureBoard(prompt: AgentPromptInput): Promise<AgentPromptInput> {
+    if (!this.boardArmed || this.boardBuilt) return prompt;
+    const text = promptText(prompt);
+    if (!isCampaignGoal(text)) return prompt;
+    this.boardBuilt = true;
+    const agentId = this.launchContext?.agentId;
+    if (!agentId) return prompt;
+    this.boardFile = boardPathFor(this.config.cwd, agentId);
+    const scopes = await this.resolveFindingScopes(
+      [this.config.title, text].filter((part) => part && part.length > 0).join("\n"),
+    );
+    const files = await listFindingFiles(this.config.cwd, { scopes });
+    if (files.length > 0) await this.runBoardBuilder(scopes, files);
+    await this.keepBoardOrFallback(files);
+    this.emitNoticeText(`Security · finding board lists ${files.length} current findings`);
+    return withBoardNote(prompt, this.boardFile);
+  }
+
+  private async runBoardBuilder(
+    scopes: readonly string[],
+    files: readonly string[],
+  ): Promise<void> {
+    const ports = this.ports;
+    const manager = this.manager;
+    const boardFile = this.boardFile;
+    const parentAgentId = this.launchContext?.agentId;
+    if (!ports?.createChildAgent || !manager || !boardFile || !parentAgentId) return;
+    this.emitNoticeText("Security · building the finding board once");
+    try {
+      const worker = await ports.createChildAgent({
+        callerAgentId: parentAgentId,
+        provider: modelRefKey(manager),
+        title: "security board",
+        cwd: this.config.cwd,
+        mode: this.mappedMode(manager.providerId),
+        systemPrompt: BOARD_SYSTEM_PROMPT,
+        initialPrompt: boardBuilderPrompt({
+          boardPath: boardFile,
+          scopes,
+          files: files.map((file) => relative(this.config.cwd, file)),
+        }),
+      });
+      await worker.waitForFinish(this.boardAbort.signal);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Security board subagent did not finish");
+    }
+  }
+
+  private async keepBoardOrFallback(files: readonly string[]): Promise<void> {
+    const existing = await readOptional(this.boardFile);
+    if (existing && boardLooksWritten(existing)) {
+      this.boardLines = boardEntryLines(existing);
+      return;
+    }
+    const entries: FindingBoardEntry[] = [];
+    for (const file of files) {
+      entries.push(await boardEntryFromFile(file, this.config.cwd));
+    }
+    await this.writeBoard(renderFindingBoard(entries));
+    this.boardLines = entries.slice(0, 40).map((entry) => formatBoardEntry(entry));
+  }
+
+  private async writeBoard(content: string): Promise<void> {
+    const path = this.boardFile;
+    if (!path) return;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, content, "utf8");
+    } catch (error) {
+      this.logger.warn({ err: error }, "Security could not write the finding board");
+    }
+  }
+
+  private async writeLedger(): Promise<void> {
+    const path = this.ledgerFile;
+    if (!path) return;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(path, renderFindingLedger(this.campaign?.findings ?? []), "utf8");
+    } catch (error) {
+      this.logger.warn({ err: error }, "Security could not write the finding ledger");
+    }
+  }
+
+  private async resolveFindingScopes(text: string): Promise<string[]> {
+    let topLevel: string[] = [];
+    let engagements: string[] = [];
+    try {
+      const entries = await readdir(this.config.cwd, { withFileTypes: true });
+      topLevel = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+      const engagementDir = entries.find(
+        (entry) => entry.isDirectory() && entry.name === "engagements",
+      );
+      if (engagementDir) {
+        const children = await readdir(`${this.config.cwd}/engagements`, { withFileTypes: true });
+        engagements = children.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+      }
+    } catch {
+      return [];
+    }
+    return resolveFindingScopes({ topLevel, engagements, text });
+  }
+
+  private async nextWorkerAssignment(report: CampaignReport): Promise<string | null> {
+    const inner = this.inner;
+    if (!inner) return null;
+    try {
+      const result = await inner.run(
+        [
+          `Previous worker ${report.providerId}/${report.modelId} #${report.replica} finished.`,
+          "Result:",
+          (report.text ?? "").slice(0, 4000),
+          "Write only the next worker assignment between :::worker-brief and :::. Do not add status for the operator.",
+        ].join("\n"),
+      );
+      return extractWorkerBrief(result.finalText);
+    } catch (error) {
+      this.logger.warn({ err: error }, "Security could not prepare the next worker assignment");
+      return null;
+    }
   }
 
   private mergeExtra(inner?: AgentMetadata): AgentMetadata {
@@ -1044,13 +1296,114 @@ function resolveManager(
   };
 }
 
-function workerPrompt(item: CampaignItem, goal: string): string {
+const BOARD_SYSTEM_PROMPT = [
+  "You build the Security finding board once.",
+  "Write the board file and stop.",
+  "Do not modify application source and do not write a finding.",
+].join(" ");
+
+function workerPrompt(
+  item: CampaignItem,
+  goal: string,
+  scopes: readonly string[],
+  extras: {
+    slice: readonly string[];
+    filed: readonly string[];
+    ledgerPath: string | null;
+    boardPath: string | null;
+    boardLines: readonly string[];
+  },
+): string {
   return [
     WORKER_SYSTEM_PROMPT,
+    workerOutputPaths(scopes),
+    searchSliceText(extras.slice),
+    boardText(extras.boardLines, extras.boardPath),
+    filedText(extras.filed, extras.ledgerPath),
     `Worker: ${modelRefKey(item)} replica ${item.replica}.`,
     "Campaign goal:",
     goal,
+  ]
+    .filter((part) => part.length > 0)
+    .join("\n");
+}
+
+function boardText(lines: readonly string[], boardPath: string | null): string {
+  if (!boardPath) return "";
+  const header = [
+    "Session board, built once from the current findings. Do not rebuild it.",
+    `Board: ${boardPath}`,
+  ];
+  if (lines.length === 0) return header.join("\n");
+  return [...header, ...lines.map((line) => `- ${line}`)].join("\n");
+}
+
+function searchSliceText(slice: readonly string[]): string {
+  if (slice.length === 0) return "";
+  return [
+    "Search only these paths, including files under them. Other workers have the rest of the tree.",
+    ...slice.map((path) => `- ${path}`),
   ].join("\n");
+}
+
+async function boardEntryFromFile(file: string, cwd: string): Promise<FindingBoardEntry> {
+  const card = await summarizeFindingFile(file, cwd);
+  const markdown = await readOptional(file);
+  return {
+    status: findingBoardStatus(markdown ?? ""),
+    title: card.title,
+    relativePath: card.relativePath,
+  };
+}
+
+async function readOptional(path: string | null): Promise<string | null> {
+  if (!path) return null;
+  try {
+    return await readFile(path, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function withBoardNote(prompt: AgentPromptInput, boardPath: string | null): AgentPromptInput {
+  if (!boardPath) return prompt;
+  const note = `Finding board: ${boardPath}. Built once from the current findings. Do not open the finding files.`;
+  if (typeof prompt === "string") return `${note}\n\n${prompt}`;
+  return [{ type: "text", text: note }, ...prompt];
+}
+
+function filedText(filed: readonly string[], ledgerPath: string | null): string {
+  const lines = [
+    "Before you write a finding, read the shared ledger again. If the same issue is already listed, do not write another file.",
+  ];
+  if (ledgerPath) lines.push(`Ledger: ${ledgerPath}`);
+  if (filed.length === 0) return lines.join("\n");
+  return [...lines, "Already filed:", ...filed.map((line) => `- ${line}`)].join("\n");
+}
+
+function workerOutputPaths(scopes: readonly string[]): string {
+  const targets = [
+    ...new Set(scopes.map((scope) => scope.replace(/^engagements\//, "").replace(/\/$/, ""))),
+  ];
+  if (targets.length === 0) {
+    return "Write findings only for the target named in the campaign goal. Do not write into another target's findings directory.";
+  }
+  const lines = targets.flatMap((target) => [
+    `- ${target}/research/review/findings/<class>/<file>.md`,
+    `- engagements/${target}/out/<host>/findings/<class>/<file>.md`,
+  ]);
+  return [
+    "Write findings only under these paths:",
+    ...lines,
+    `Do not write outside ${targets.join(", ")}.`,
+  ].join("\n");
+}
+
+export function extractWorkerBrief(text: string | null): string | null {
+  if (!text) return null;
+  const match = /:::worker-brief\s*([\s\S]*?)\s*:::/.exec(text);
+  const body = match?.[1]?.trim() ?? "";
+  return body.length > 0 ? body : null;
 }
 
 function workerNotice(

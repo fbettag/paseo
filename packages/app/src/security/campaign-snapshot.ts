@@ -9,6 +9,12 @@ export const CAMPAIGN_WORKER_STATES = [
 export type CampaignWorkerState = (typeof CAMPAIGN_WORKER_STATES)[number];
 export type CampaignPace = "quiet" | "steady" | "aggressive";
 
+export interface CampaignFindingAlso {
+  relativePath: string;
+  providerId?: string;
+  modelId?: string;
+}
+
 export interface CampaignFinding {
   path: string;
   relativePath: string;
@@ -18,6 +24,11 @@ export interface CampaignFinding {
   title: string;
   summary: string;
   severity?: string;
+  providerId?: string;
+  modelId?: string;
+  chain?: string;
+  prior?: boolean;
+  alsoFoundBy?: CampaignFindingAlso[];
 }
 
 export interface CampaignWorkerSnapshot {
@@ -43,6 +54,7 @@ export interface CampaignSnapshot {
   findings: CampaignFinding[];
   complete: boolean;
   pace: CampaignPace;
+  scopes: string[];
 }
 
 const WORKER_STATE_SET = new Set<string>(CAMPAIGN_WORKER_STATES);
@@ -74,6 +86,9 @@ export function parseCampaignSnapshot(value: unknown): CampaignSnapshot | null {
     findings,
     complete: record.complete === true,
     pace,
+    scopes: Array.isArray(record.scopes)
+      ? record.scopes.filter((scope): scope is string => typeof scope === "string")
+      : [],
   };
 }
 
@@ -114,7 +129,165 @@ function parseFinding(value: unknown): CampaignFinding | null {
     ...(typeof record.host === "string" ? { host: record.host } : {}),
     ...(typeof record.class === "string" ? { class: record.class } : {}),
     ...(typeof record.severity === "string" ? { severity: record.severity } : {}),
+    ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
+    ...(typeof record.modelId === "string" ? { modelId: record.modelId } : {}),
+    ...(typeof record.chain === "string" ? { chain: record.chain } : {}),
+    ...(record.prior === true ? { prior: true } : {}),
+    ...parseAlsoFound(record.alsoFoundBy),
   };
+}
+
+function parseAlsoFound(
+  value: unknown,
+): { alsoFoundBy: CampaignFindingAlso[] } | Record<string, never> {
+  if (!Array.isArray(value)) return {};
+  const alsoFoundBy: CampaignFindingAlso[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    if (typeof record.relativePath !== "string") continue;
+    alsoFoundBy.push({
+      relativePath: record.relativePath,
+      ...(typeof record.providerId === "string" ? { providerId: record.providerId } : {}),
+      ...(typeof record.modelId === "string" ? { modelId: record.modelId } : {}),
+    });
+  }
+  return alsoFoundBy.length > 0 ? { alsoFoundBy } : {};
+}
+
+export function campaignKeepsParentActive(value: unknown): boolean {
+  const snapshot = parseCampaignSnapshot(value);
+  if (!snapshot || snapshot.complete) return false;
+  return snapshot.queued + snapshot.running > 0;
+}
+
+export function selectCampaignFindings(
+  snapshot: CampaignSnapshot,
+  options: { title?: string | null; query?: string; includePrior?: boolean },
+): CampaignFinding[] {
+  const unique = collapseFindings(snapshot.findings);
+  const scoped =
+    snapshot.scopes.length > 0
+      ? unique.filter((finding) => pathMatchesScope(finding.relativePath, snapshot.scopes))
+      : findingsForTitle(unique, options.title);
+  const query = options.query?.trim().toLowerCase() ?? "";
+  return scoped
+    .filter((finding) => options.includePrior === true || finding.prior !== true)
+    .filter((finding) => findingMatchesQuery(finding, query))
+    .toReversed();
+}
+
+const MIN_TITLE_KEY = 12;
+
+function collapseFindings(findings: readonly CampaignFinding[]): CampaignFinding[] {
+  const collapsed: CampaignFinding[] = [];
+  for (const finding of findings) {
+    const index = collapsed.findIndex((existing) => sameDisplayedFinding(existing, finding));
+    if (index < 0) {
+      collapsed.push(finding);
+      continue;
+    }
+    const previous = collapsed[index];
+    if (!previous) continue;
+    collapsed[index] = mergeDisplayedFinding(previous, finding);
+  }
+  return collapsed;
+}
+
+function sameDisplayedFinding(left: CampaignFinding, right: CampaignFinding): boolean {
+  if (left.relativePath === right.relativePath) return true;
+  const leftKey = titleKey(left.title);
+  const rightKey = titleKey(right.title);
+  return leftKey !== null && leftKey === rightKey;
+}
+
+function mergeDisplayedFinding(
+  previous: CampaignFinding,
+  incoming: CampaignFinding,
+): CampaignFinding {
+  if (previous.relativePath === incoming.relativePath) {
+    return {
+      ...incoming,
+      ...(previous.alsoFoundBy && !incoming.alsoFoundBy
+        ? { alsoFoundBy: previous.alsoFoundBy }
+        : {}),
+    };
+  }
+  const incomingRicher = incoming.summary.length > previous.summary.length;
+  const primary = incomingRicher ? incoming : previous;
+  const secondary = incomingRicher ? previous : incoming;
+  return {
+    ...primary,
+    alsoFoundBy: mergeDisplayedAlso(primary, secondary),
+  };
+}
+
+function mergeDisplayedAlso(
+  primary: CampaignFinding,
+  secondary: CampaignFinding,
+): CampaignFindingAlso[] {
+  const items: CampaignFindingAlso[] = [
+    ...(primary.alsoFoundBy ?? []),
+    ...(secondary.alsoFoundBy ?? []),
+    {
+      relativePath: secondary.relativePath,
+      ...(secondary.providerId ? { providerId: secondary.providerId } : {}),
+      ...(secondary.modelId ? { modelId: secondary.modelId } : {}),
+    },
+  ];
+  const seen = new Set<string>();
+  const unique: CampaignFindingAlso[] = [];
+  for (const item of items) {
+    if (item.relativePath === primary.relativePath || seen.has(item.relativePath)) continue;
+    seen.add(item.relativePath);
+    unique.push(item);
+  }
+  return unique;
+}
+
+function titleKey(title: string): string | null {
+  const normalized = title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  if (normalized.length < MIN_TITLE_KEY) return null;
+  return normalized;
+}
+
+function pathMatchesScope(relativePath: string, scopes: readonly string[]): boolean {
+  return scopes.some(
+    (scope) => relativePath === scope.replace(/\/$/, "") || relativePath.startsWith(scope),
+  );
+}
+
+function findingsForTitle(
+  findings: readonly CampaignFinding[],
+  title: string | null | undefined,
+): CampaignFinding[] {
+  const tokens = new Set(
+    (title ?? "")
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length >= 4),
+  );
+  if (tokens.size === 0) return [...findings];
+  const matched = findings.filter((finding) => tokens.has(targetName(finding.relativePath)));
+  return matched.length > 0 ? matched : [...findings];
+}
+
+function targetName(relativePath: string): string {
+  const parts = relativePath.split("/").filter(Boolean);
+  const name = parts[0] === "engagements" ? parts[1] : parts[0];
+  return name?.toLowerCase() ?? "";
+}
+
+function findingMatchesQuery(finding: CampaignFinding, query: string): boolean {
+  if (query.length === 0) return true;
+  const model = [finding.providerId, finding.modelId].filter(Boolean).join("/");
+  return [finding.title, finding.summary, finding.chain, model, finding.relativePath]
+    .join("\n")
+    .toLowerCase()
+    .includes(query);
 }
 
 function asCount(value: unknown, fallback: number): number {

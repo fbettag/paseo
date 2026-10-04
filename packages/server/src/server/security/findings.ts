@@ -4,6 +4,12 @@ import { basename, join, relative } from "node:path";
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git"]);
 export const FINDINGS_WATCH_MS = 2_000;
 
+export interface FindingAlsoFound {
+  relativePath: string;
+  providerId?: string;
+  modelId?: string;
+}
+
 export interface FindingCard {
   path: string;
   relativePath: string;
@@ -13,6 +19,11 @@ export interface FindingCard {
   title: string;
   summary: string;
   severity?: string;
+  providerId?: string;
+  modelId?: string;
+  chain?: string;
+  prior?: boolean;
+  alsoFoundBy?: FindingAlsoFound[];
 }
 
 export interface ParsedFindingPath {
@@ -24,11 +35,70 @@ export interface ParsedFindingPath {
   fileName: string;
 }
 
-export async function listFindingFiles(root: string): Promise<string[]> {
+const GENERIC_SCOPE_NAMES = new Set([
+  "build",
+  "dist",
+  "engagements",
+  "findings",
+  "git",
+  "node_modules",
+  "out",
+  "poc",
+  "research",
+  "review",
+  "src",
+]);
+
+export function resolveFindingScopes(input: {
+  topLevel: readonly string[];
+  engagements: readonly string[];
+  text: string;
+}): string[] {
+  const scopes: string[] = [];
+  const seen = new Set<string>();
+  const add = (scope: string) => {
+    if (seen.has(scope)) return;
+    seen.add(scope);
+    scopes.push(scope);
+  };
+  for (const name of input.topLevel) {
+    if (!isCampaignToken(name, input.text)) continue;
+    add(`${name}/`);
+  }
+  for (const name of input.engagements) {
+    if (!isCampaignToken(name, input.text)) continue;
+    add(`engagements/${name}/`);
+  }
+  for (const name of input.topLevel) {
+    if (!scopes.some((scope) => scope === `${name}/` || scope === `engagements/${name}/`)) continue;
+    add(`engagements/${name}/`);
+  }
+  return scopes;
+}
+
+function isCampaignToken(name: string, text: string): boolean {
+  const token = name.trim().toLowerCase();
+  if (token.length < 4 || GENERIC_SCOPE_NAMES.has(token)) return false;
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:[^a-z0-9]|$)`, "i").test(text);
+}
+
+export async function listFindingFiles(
+  root: string,
+  options?: { scopes?: readonly string[] },
+): Promise<string[]> {
   const found: string[] = [];
   await walk(root, false, found);
   found.sort();
-  return found;
+  const scopes = options?.scopes;
+  if (!scopes) return found;
+  if (scopes.length === 0) return [];
+  return found.filter((filePath) => {
+    const relativePath = relative(root, filePath).split("\\").join("/");
+    return scopes.some(
+      (scope) => relativePath === scope.slice(0, -1) || relativePath.startsWith(scope),
+    );
+  });
 }
 
 export function countFindingFiles(files: readonly string[]): number {
@@ -61,10 +131,12 @@ export function parseFindingMarkdown(content: string): {
   title: string;
   summary: string;
   severity?: string;
+  chain?: string;
 } {
   const lines = content.split(/\r?\n/);
   let title = "";
   let severity: string | undefined;
+  let chain: string | undefined;
   const body: string[] = [];
   for (const raw of lines) {
     const line = raw.trim();
@@ -79,6 +151,11 @@ export function parseFindingMarkdown(content: string): {
       severity = sev[1].trim();
       continue;
     }
+    const linked = /^(?:chain|kette)\s*:\s*(.+)$/i.exec(line);
+    if (linked) {
+      chain = linked[1].trim();
+      continue;
+    }
     body.push(line);
   }
   const summary = (body[0] ?? "").slice(0, 240);
@@ -86,6 +163,7 @@ export function parseFindingMarkdown(content: string): {
     title: title || summary.slice(0, 80) || "Finding",
     summary,
     ...(severity ? { severity } : {}),
+    ...(chain ? { chain } : {}),
   };
 }
 
@@ -95,11 +173,13 @@ export async function summarizeFindingFile(filePath: string, cwd: string): Promi
   let title = fallbackTitle;
   let summary = "";
   let severity: string | undefined;
+  let chain: string | undefined;
   try {
     const markdown = parseFindingMarkdown(await readFile(filePath, "utf8"));
     title = markdown.title === "Finding" ? fallbackTitle : markdown.title;
     summary = markdown.summary;
     severity = markdown.severity;
+    chain = markdown.chain;
   } catch {
     // Keep the file name when the finding cannot be read yet.
   }
@@ -112,6 +192,7 @@ export async function summarizeFindingFile(filePath: string, cwd: string): Promi
     ...(parsed.host ? { host: parsed.host } : {}),
     ...(parsed.class ? { class: parsed.class } : {}),
     ...(severity ? { severity } : {}),
+    ...(chain ? { chain } : {}),
   };
 }
 

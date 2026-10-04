@@ -1946,6 +1946,11 @@ export const ar: TranslationResources = {
       openFinding: "فتح {{title}}",
       openWorker: "فتح {{label}}",
       emptyFindings: "لا نتائج بعد",
+      search: "البحث في النتائج",
+      showEarlier: "الأقدم ({{count}})",
+      hideEarlier: "إخفاء الأقدم",
+      chain: "سلسلة: {{chain}}",
+      also: "أُبلغ أيضاً: {{models}}",
     },
   },
   panels: {

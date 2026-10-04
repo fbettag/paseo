@@ -61,6 +61,9 @@ export const AgentTracks = memo(function AgentTracks({
     (state) => state.sessions[serverId]?.serverInfo?.features?.agentDetach === true,
   );
   const archiveSubagent = useArchiveSubagent({ serverId });
+  const campaignTitle = useSessionStore(
+    (state) => state.sessions[serverId]?.agents.get(agentId)?.title ?? null,
+  );
   const detachSubagent = useDetachSubagent({ serverId });
   const openSubagentTarget = useCallback(
     (target: WorkspaceTabTarget) => {
@@ -121,7 +124,13 @@ export const AgentTracks = memo(function AgentTracks({
   return (
     <ComposerTrackBar>
       <AgentTaskList tasks={tasks} />
-      {campaign ? <CampaignTrack snapshot={campaign} onOpenWorker={handleOpenSubagent} /> : null}
+      {campaign ? (
+        <CampaignTrack
+          snapshot={campaign}
+          title={campaignTitle}
+          onOpenWorker={handleOpenSubagent}
+        />
+      ) : null}
       <SubagentsTrack
         serverId={serverId}
         rows={subagentRows}

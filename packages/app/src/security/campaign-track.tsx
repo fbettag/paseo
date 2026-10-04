@@ -1,5 +1,5 @@
-import { useCallback, useMemo, type ReactElement } from "react";
-import { Text, View } from "react-native";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { Pressable, Text, View } from "react-native";
 import { useTranslation } from "react-i18next";
 import { StyleSheet } from "react-native-unistyles";
 import {
@@ -7,9 +7,11 @@ import {
   ComposerTrackRow,
   type ComposerTrackPillSegment,
 } from "@/composer/tracks";
+import { EditingTextInput } from "@/components/ui/text-input";
 import { usePaneContext } from "@/panels/pane-context";
 import type { SidebarStateBucket } from "@/utils/sidebar-agent-state";
 import {
+  selectCampaignFindings,
   type CampaignFinding,
   type CampaignSnapshot,
   type CampaignWorkerSnapshot,
@@ -18,13 +20,17 @@ import {
 
 export function CampaignTrack({
   snapshot,
+  title,
   onOpenWorker,
 }: {
   snapshot: CampaignSnapshot;
+  title?: string | null;
   onOpenWorker: (agentId: string) => void;
 }): ReactElement {
   const { t } = useTranslation();
   const { openFileInWorkspace } = usePaneContext();
+  const [query, setQuery] = useState("");
+  const [includePrior, setIncludePrior] = useState(false);
   const finished = snapshot.done + snapshot.skipped + snapshot.failed;
   const segments = useMemo((): ComposerTrackPillSegment[] => {
     const progress: ComposerTrackPillSegment = {
@@ -41,6 +47,15 @@ export function CampaignTrack({
     ];
   }, [finished, snapshot, t]);
   const ratio = snapshot.total > 0 ? Math.min(1, finished / snapshot.total) : 0;
+  const findings = useMemo(
+    () => selectCampaignFindings(snapshot, { title, query, includePrior }),
+    [includePrior, query, snapshot, title],
+  );
+  const priorCount = snapshot.findings.filter((finding) => finding.prior === true).length;
+
+  const togglePrior = useCallback(() => {
+    setIncludePrior((current) => !current);
+  }, []);
 
   const handleOpenFinding = useCallback(
     (finding: CampaignFinding) => {
@@ -70,12 +85,34 @@ export function CampaignTrack({
       {snapshot.workers.map((worker) => (
         <CampaignWorkerRow key={worker.key} worker={worker} onOpenWorker={onOpenWorker} />
       ))}
-      {snapshot.findings.length === 0 ? (
+      <EditingTextInput
+        initialValue=""
+        onChangeText={setQuery}
+        placeholder={t("security.campaign.search")}
+        placeholderTextColor={styles.searchPlaceholder.color}
+        style={styles.search}
+        testID="security-campaign-search"
+      />
+      {priorCount > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={togglePrior}
+          style={styles.priorToggle}
+          testID="security-campaign-prior"
+        >
+          <Text style={styles.rowTrailing}>
+            {includePrior
+              ? t("security.campaign.hideEarlier")
+              : t("security.campaign.showEarlier", { count: priorCount })}
+          </Text>
+        </Pressable>
+      ) : null}
+      {findings.length === 0 ? (
         <Text style={styles.empty}>{t("security.campaign.emptyFindings")}</Text>
       ) : (
-        snapshot.findings.map((finding) => (
+        findings.map((finding) => (
           <CampaignFindingRow
-            key={finding.path}
+            key={finding.relativePath}
             finding={finding}
             onOpenFinding={handleOpenFinding}
           />
@@ -134,6 +171,21 @@ function CampaignFindingRow({
           <Text style={active ? styles.findingTitleActive : styles.findingTitle} numberOfLines={1}>
             {finding.title}
           </Text>
+          {finding.providerId || finding.modelId ? (
+            <Text style={styles.findingSummary} numberOfLines={1}>
+              {[finding.providerId, finding.modelId].filter(Boolean).join("/")}
+            </Text>
+          ) : null}
+          {finding.chain ? (
+            <Text style={styles.findingSummary} numberOfLines={2}>
+              {t("security.campaign.chain", { chain: finding.chain })}
+            </Text>
+          ) : null}
+          {finding.alsoFoundBy && finding.alsoFoundBy.length > 0 ? (
+            <Text style={styles.findingSummary} numberOfLines={1}>
+              {t("security.campaign.also", { models: alsoFoundLabel(finding) })}
+            </Text>
+          ) : null}
           {finding.summary ? (
             <Text style={styles.findingSummary} numberOfLines={2}>
               {finding.summary}
@@ -149,6 +201,12 @@ function CampaignProgressFill({ ratio }: { ratio: number }): ReactElement {
   const width: `${number}%` = `${Math.round(ratio * 100)}%`;
   const fillStyle = useMemo(() => [styles.progressFill, { width }], [width]);
   return <View style={fillStyle} />;
+}
+
+function alsoFoundLabel(finding: CampaignFinding): string {
+  return (finding.alsoFoundBy ?? [])
+    .map((item) => [item.providerId, item.modelId].filter(Boolean).join("/") || item.relativePath)
+    .join(", ");
 }
 
 function campaignBucket(snapshot: CampaignSnapshot): SidebarStateBucket | null {
@@ -205,6 +263,24 @@ const styles = StyleSheet.create((theme) => ({
     minWidth: 0,
     fontSize: theme.fontSize.sm,
     color: theme.colors.foregroundMuted,
+  },
+  search: {
+    marginHorizontal: theme.spacing[3],
+    marginBottom: theme.spacing[2],
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    borderRadius: theme.borderRadius.sm,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    color: theme.colors.foreground,
+    fontSize: theme.fontSize.sm,
+  },
+  searchPlaceholder: {
+    color: theme.colors.foregroundMuted,
+  },
+  priorToggle: {
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[2],
   },
   empty: {
     paddingHorizontal: theme.spacing[3],
