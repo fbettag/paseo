@@ -361,9 +361,11 @@ describe("SecurityAgentClient", () => {
         ],
       }),
       expect.objectContaining({
-        type: "select",
-        id: "pace",
-        value: "quiet",
+        type: "stepper",
+        id: "parallel",
+        value: 1,
+        min: 1,
+        max: 4,
       }),
     ]);
 
@@ -420,6 +422,30 @@ describe("SecurityAgentClient", () => {
       throw new Error("Expected slots feature");
     }
     expect(slotsFeature.value).toEqual([{ model: "glm/glm-5.3-flash", replicas: 2 }]);
+  });
+
+  it("clamps the parallel stepper when a slot is removed", async () => {
+    const harness = ports();
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    if (!session.setFeature) {
+      throw new Error("Security session is missing setFeature");
+    }
+    await session.setFeature("slots", [
+      { model: "glm/glm-5.3-flash", replicas: 2 },
+      { model: "grok/grok-4.6", replicas: 2 },
+    ]);
+    await session.setFeature("parallel", 4);
+    await session.setFeature("slots", [{ model: "grok/grok-4.6", replicas: 1 }]);
+    const parallel = session.features?.find((feature) => feature.id === "parallel");
+    expect(parallel).toMatchObject({ type: "stepper", value: 1, min: 1, max: 1 });
   });
 
   it("resumes the manager and does not restart workers", async () => {

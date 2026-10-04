@@ -83,6 +83,27 @@ describe("agent feature schemas", () => {
     },
   );
 
+  it("parses valid stepper features", () => {
+    const parsed = AgentFeatureSchema.parse({
+      type: "stepper",
+      id: "parallel",
+      label: "Parallel",
+      description: "How many workers run at once",
+      tooltip: "Workers at once",
+      icon: "zap",
+      value: 2,
+      min: 1,
+      max: 4,
+    });
+
+    expect(parsed.type).toBe("stepper");
+    if (parsed.type !== "stepper") {
+      throw new Error("Expected stepper feature");
+    }
+    expect(parsed.value).toBe(2);
+    expect(parsed.max).toBe(4);
+  });
+
   it("rejects invalid features", () => {
     const invalidDiscriminator = AgentFeatureSchema.safeParse({
       type: "slider",

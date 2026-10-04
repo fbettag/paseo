@@ -4,6 +4,7 @@ import { AgentFeatureSlotValueSchema } from "@getpaseo/protocol/messages";
 
 const featureValueSchema = z.union([
   z.boolean(),
+  z.number(),
   z.string(),
   z.null(),
   z.array(AgentFeatureSlotValueSchema),

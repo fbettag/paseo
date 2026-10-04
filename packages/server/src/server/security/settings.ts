@@ -51,6 +51,9 @@ export interface ResolvedSecuritySchedule {
 
 export const SECURITY_SLOTS_FEATURE_ID = "slots";
 export const SECURITY_PACE_FEATURE_ID = "pace";
+export const SECURITY_PARALLEL_FEATURE_ID = "parallel";
+/** An empty slot list still runs two copies of the manager model. */
+export const EMPTY_SLOT_WORKER_LIMIT = 2;
 
 export function parsePace(value: unknown): SecurityPace | null {
   const parsed = SecurityPaceSchema.safeParse(value);
@@ -76,13 +79,67 @@ export function parseSecurityParams(value: unknown): ResolvedSecurityParams {
   };
 }
 
+export function workerLimit(slots: readonly SecuritySlot[]): number {
+  let count = 0;
+  for (const slot of slots) {
+    count += slot.replicas;
+  }
+  if (count === 0) return EMPTY_SLOT_WORKER_LIMIT;
+  return count;
+}
+
+export function parseParallel(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  const truncated = Math.trunc(value);
+  if (truncated < 1) return null;
+  return truncated;
+}
+
+export function clampParallel(value: unknown, limit: number): number {
+  const parsed = parseParallel(value) ?? 1;
+  return Math.min(Math.max(1, limit), Math.max(1, parsed));
+}
+
+export function scheduleFromParallel(parallel: number): ResolvedSecuritySchedule {
+  const maxParallel = Math.max(1, parallel);
+  return {
+    pace: inferPace(maxParallel),
+    maxParallel,
+    staggerMs: maxParallel === 1 ? DEFAULT_STAGGER_MS : 0,
+  };
+}
+
 export function resolveSessionSchedule(
   featureValues: Record<string, unknown> | undefined,
   fallback: ResolvedSecuritySchedule,
+  slots: readonly SecuritySlot[] = [],
 ): ResolvedSecuritySchedule {
+  const limit = workerLimit(slots);
+  if (
+    featureValues &&
+    Object.prototype.hasOwnProperty.call(featureValues, SECURITY_PARALLEL_FEATURE_ID)
+  ) {
+    return scheduleFromParallel(clampParallel(featureValues[SECURITY_PARALLEL_FEATURE_ID], limit));
+  }
   const pace = parsePace(featureValues?.[SECURITY_PACE_FEATURE_ID]);
-  if (!pace) return fallback;
-  return scheduleFromPace(pace);
+  const base = pace ? scheduleFromPace(pace) : fallback;
+  return clampSchedule(base, limit);
+}
+
+function clampSchedule(
+  schedule: ResolvedSecuritySchedule,
+  limit: number,
+): ResolvedSecuritySchedule {
+  const maxParallel = Math.min(schedule.maxParallel, limit);
+  if (maxParallel === schedule.maxParallel) return schedule;
+  if (maxParallel <= 1) {
+    return scheduleFromParallel(1);
+  }
+  return {
+    pace: inferPace(maxParallel),
+    maxParallel,
+    staggerMs: schedule.staggerMs,
+  };
 }
 
 export function parseSlotsFeatureValue(value: unknown): SecuritySlot[] {

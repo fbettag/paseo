@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/select-field";
 import { Switch } from "@/components/ui/switch";
 import { SlotsFeaturePanel } from "@/composer/agent-controls/slots-feature";
+import { StepperFeatureControl } from "@/composer/agent-controls/stepper-feature";
 import { useIsCompactFormFactor } from "@/constants/layout";
 import { toErrorMessage } from "@/utils/error-messages";
 import { AgentProfileAppearanceField } from "./agent-profile-appearance-field";
@@ -430,6 +431,10 @@ function AgentProfileFeatureRow({
     (value: AgentFeatureSlotValue[]) => model.setFeatureValue(feature.id, value),
     [feature.id, model],
   );
+  const handleStepper = useCallback(
+    (featureId: string, value: unknown) => model.setFeatureValue(featureId, value),
+    [model],
+  );
   const selectOptions = useMemo<SelectFieldOption<string>[]>(
     () =>
       feature.type === "select"
@@ -450,6 +455,29 @@ function AgentProfileFeatureRow({
     const option = feature.options.find((candidate) => candidate.id === feature.value);
     return { label: option?.label ?? feature.value };
   }, [feature]);
+
+  if (feature.type === "stepper") {
+    return (
+      <View style={rowStyle} testID={`agent-profile-feature-row-${feature.id}`}>
+        <View style={styles.featureMeta}>
+          <Text style={styles.featureLabel} numberOfLines={1}>
+            {feature.label}
+          </Text>
+          {feature.description ? (
+            <Text style={styles.featureDescription} numberOfLines={2}>
+              {feature.description}
+            </Text>
+          ) : null}
+        </View>
+        <StepperFeatureControl
+          feature={feature}
+          disabled={disabled}
+          onSetFeature={handleStepper}
+          surface="profile"
+        />
+      </View>
+    );
+  }
 
   if (feature.type === "slots") {
     return (

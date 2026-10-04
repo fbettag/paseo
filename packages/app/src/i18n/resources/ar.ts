@@ -219,6 +219,10 @@ export const ar: TranslationResources = {
       on: "على",
       off: "عن",
     },
+    stepper: {
+      decrease: "تقليل العمال المتوازيين",
+      increase: "زيادة العمال المتوازيين",
+    },
     slots: {
       search: "البحث عن النماذج...",
       clearSearch: "مسح البحث",

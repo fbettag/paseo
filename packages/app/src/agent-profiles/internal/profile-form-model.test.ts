@@ -70,6 +70,12 @@ function optionValues(options: readonly { value: string }[]): string[] {
   return options.map((option) => option.value);
 }
 
+function parallelFeature(model: AgentProfileFormModel): { value: number; max: number } | undefined {
+  const feature = model.getState().features.find((entry) => entry.id === "parallel");
+  if (!feature || feature.type !== "stepper") return undefined;
+  return { value: feature.value, max: feature.max };
+}
+
 describe("openAgentProfileForm", () => {
   it("starts a create form empty and cannot submit", () => {
     const model = openWithCatalog({ mode: "create" });
@@ -404,6 +410,35 @@ describe("openAgentProfileForm", () => {
 
       expect(model.getState().featureResolution).toBe("pending");
       expect(model.getState().submitValue?.featureValues).toEqual({ webSearch: true });
+    });
+
+    it("lowers a stored parallel integer when the selected slots shrink", () => {
+      const model = openWithCatalog({ mode: "create" });
+      selectClaude(model);
+      model.applyFeatures(model.getState().featureRequestKey ?? "", [
+        {
+          type: "slots",
+          id: "slots",
+          label: "Subagent models",
+          value: [],
+          options: [],
+          minReplicas: 1,
+          maxReplicas: 8,
+        },
+        { type: "stepper", id: "parallel", label: "Parallel", value: 1, min: 1, max: 2 },
+      ]);
+      model.setFeatureValue("slots", [
+        { model: "grok/grok-4.6", replicas: 2 },
+        { model: "glm/glm-5.3-flash", replicas: 2 },
+      ]);
+      model.setFeatureValue("parallel", 4);
+
+      expect(parallelFeature(model)).toEqual({ value: 4, max: 4 });
+
+      model.setFeatureValue("slots", [{ model: "grok/grok-4.6", replicas: 1 }]);
+
+      expect(model.getState().featureValues.parallel).toBe(1);
+      expect(parallelFeature(model)).toEqual({ value: 1, max: 1 });
     });
 
     it("prunes stored values the provider no longer reports", () => {

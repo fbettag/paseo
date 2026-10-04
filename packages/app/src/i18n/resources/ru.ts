@@ -221,6 +221,10 @@ export const ru: TranslationResources = {
       on: "Включено",
       off: "Выключено",
     },
+    stepper: {
+      decrease: "Уменьшить параллельных воркеров",
+      increase: "Увеличить параллельных воркеров",
+    },
     slots: {
       search: "Поиск моделей...",
       clearSearch: "Очистить поиск",
