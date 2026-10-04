@@ -211,6 +211,10 @@ export const en = {
       on: "On",
       off: "Off",
     },
+    stepper: {
+      decrease: "Decrease parallel workers",
+      increase: "Increase parallel workers",
+    },
     slots: {
       search: "Search models...",
       clearSearch: "Clear search",

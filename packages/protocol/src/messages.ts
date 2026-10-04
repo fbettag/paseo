@@ -338,10 +338,24 @@ export const AgentFeatureSlotsSchema = z.object({
   maxReplicas: z.number().int().min(1).max(8),
 });
 
+export const AgentFeatureStepperSchema = z.object({
+  type: z.literal("stepper"),
+  id: z.string(),
+  label: z.string(),
+  description: z.string().optional(),
+  tooltip: z.string().optional(),
+  icon: z.string().optional(),
+  desktopTrigger: z.enum(["icon", "label"]).optional(),
+  value: z.number().int(),
+  min: z.number().int(),
+  max: z.number().int(),
+});
+
 export const AgentFeatureSchema = z.discriminatedUnion("type", [
   AgentFeatureToggleSchema,
   AgentFeatureSelectSchema,
   AgentFeatureSlotsSchema,
+  AgentFeatureStepperSchema,
 ]);
 
 const AgentModelDefinitionSchema = z.object({

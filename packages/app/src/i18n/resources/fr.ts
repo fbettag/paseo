@@ -219,6 +219,10 @@ export const fr: TranslationResources = {
       on: "Sur",
       off: "Désactivé",
     },
+    stepper: {
+      decrease: "Diminuer les workers parallèles",
+      increase: "Augmenter les workers parallèles",
+    },
     slots: {
       search: "Rechercher des modèles...",
       clearSearch: "Effacer la recherche",

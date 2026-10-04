@@ -49,15 +49,19 @@ import {
   summarizeFindingFile,
 } from "../../security/findings.js";
 import {
+  clampParallel,
   parsePace,
+  parseParallel,
   parseSecurityParams,
   parseSlotsFeatureValue,
   resolveSessionSchedule,
   resolveSessionSlots,
   scheduleFromPace,
+  scheduleFromParallel,
   SECURITY_PACE_FEATURE_ID,
-  SECURITY_PACES,
+  SECURITY_PARALLEL_FEATURE_ID,
   SECURITY_SLOTS_FEATURE_ID,
+  workerLimit,
   type ResolvedSecurityParams,
   type ResolvedSecuritySchedule,
   type SecurityPace,
@@ -169,8 +173,11 @@ export class SecurityAgentClient {
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
     const candidates = await this.readCandidates(config.cwd);
     const slots = resolveSessionSlots(config.featureValues, this.params.slots);
-    const schedule = resolveSessionSchedule(config.featureValues, this.params);
-    return [buildSlotsFeature(slots, slotOptions(candidates)), buildPaceFeature(schedule.pace)];
+    const schedule = resolveSessionSchedule(config.featureValues, this.params, slots);
+    return [
+      buildSlotsFeature(slots, slotOptions(candidates)),
+      buildParallelFeature(schedule.maxParallel, workerLimit(slots)),
+    ];
   }
 
   async createSession(
@@ -212,12 +219,15 @@ export class SecurityAgentClient {
     );
     const candidates = await this.readCandidates(cwd);
     const resumedSlots = routed.slots ?? this.params.slots;
-    const resumedPace = routed.pace ?? this.params.pace;
-    const resumedFeatureValues = {
+    const resumedFeatureValues: Record<string, unknown> = {
       ...overrides?.featureValues,
       [SECURITY_SLOTS_FEATURE_ID]: resumedSlots,
-      [SECURITY_PACE_FEATURE_ID]: resumedPace,
     };
+    if (routed.parallel !== null) {
+      resumedFeatureValues[SECURITY_PARALLEL_FEATURE_ID] = routed.parallel;
+    } else {
+      resumedFeatureValues[SECURITY_PACE_FEATURE_ID] = routed.pace ?? this.params.pace;
+    }
     const session = new SecurityAgentSession(
       this.logger,
       ports,
@@ -279,11 +289,14 @@ class SecurityAgentSession implements AgentSession {
     private readonly createOptions?: AgentCreateSessionOptions,
   ) {
     this.slots = resolveSessionSlots(config.featureValues, params.slots);
-    this.schedule = resolveSessionSchedule(config.featureValues, params);
+    this.schedule = resolveSessionSchedule(config.featureValues, params, this.slots);
   }
 
   get features(): AgentFeature[] {
-    return [buildSlotsFeature(this.slots, this.slotChoices), buildPaceFeature(this.schedule.pace)];
+    return [
+      buildSlotsFeature(this.slots, this.slotChoices),
+      buildParallelFeature(this.schedule.maxParallel, workerLimit(this.slots)),
+    ];
   }
 
   get id(): string | null {
@@ -364,12 +377,21 @@ class SecurityAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    if (featureId === SECURITY_PARALLEL_FEATURE_ID) {
+      const next = clampParallel(value, workerLimit(this.slots));
+      this.schedule = scheduleFromParallel(next);
+      this.config.featureValues = {
+        ...this.config.featureValues,
+        [SECURITY_PARALLEL_FEATURE_ID]: next,
+      };
+      return;
+    }
     if (featureId === SECURITY_PACE_FEATURE_ID) {
       const pace = parsePace(value);
       if (!pace) {
         throw new Error(`Unknown Security pace '${String(value)}'`);
       }
-      this.schedule = scheduleFromPace(pace);
+      this.schedule = clampScheduleToSlots(scheduleFromPace(pace), this.slots);
       this.config.featureValues = {
         ...this.config.featureValues,
         [SECURITY_PACE_FEATURE_ID]: pace,
@@ -380,10 +402,16 @@ class SecurityAgentSession implements AgentSession {
       throw new Error(`Unknown Security feature '${featureId}'`);
     }
     this.slots = resolveSessionSlots({ [SECURITY_SLOTS_FEATURE_ID]: value }, []);
-    this.config.featureValues = {
+    const featureValues: Record<string, unknown> = {
       ...this.config.featureValues,
       [SECURITY_SLOTS_FEATURE_ID]: this.slots,
     };
+    const limit = workerLimit(this.slots);
+    if (this.schedule.maxParallel > limit) {
+      this.schedule = scheduleFromParallel(limit);
+      featureValues[SECURITY_PARALLEL_FEATURE_ID] = limit;
+    }
+    this.config.featureValues = featureValues;
   }
 
   async setMode(modeId: string): Promise<void> {
@@ -427,6 +455,7 @@ class SecurityAgentSession implements AgentSession {
         providerLabel: manager.providerLabel,
         campaignComplete: this.campaignComplete,
         slots: this.slots,
+        parallel: this.schedule.maxParallel,
         pace: this.schedule.pace,
         inner,
       },
@@ -552,7 +581,9 @@ class SecurityAgentSession implements AgentSession {
     const items = expandSlots(this.slots, manager);
     this.campaign = createCampaignSnapshot(items, schedule.pace);
     this.emitCampaign();
-    this.emitNoticeText(`Security · fleet ${items.length} workers, pace ${schedule.pace}`);
+    this.emitNoticeText(
+      `Security · fleet ${items.length} workers, parallel ${schedule.maxParallel}`,
+    );
     if (items.length === 0) {
       this.campaignComplete = true;
       this.campaign = tallyCampaign({ ...this.campaign, complete: true });
@@ -835,34 +866,29 @@ function buildSlotsFeature(
   };
 }
 
-function buildPaceFeature(value: SecurityPace): AgentFeature {
+function buildParallelFeature(value: number, limit: number): AgentFeature {
+  const max = Math.max(1, limit);
   return {
-    type: "select",
-    id: SECURITY_PACE_FEATURE_ID,
-    label: "Pace",
-    description: "How many workers start at once, and how long to wait between starts.",
-    tooltip: "Quiet serializes starts. Aggressive runs four at once.",
+    type: "stepper",
+    id: SECURITY_PARALLEL_FEATURE_ID,
+    label: "Parallel",
+    description: "How many workers run at once. 1 waits 30s between starts.",
+    tooltip: "Workers at once. 1 waits 30s between starts.",
     icon: "zap",
     desktopTrigger: "label",
-    value,
-    options: SECURITY_PACES.map((pace) => ({
-      id: pace,
-      label: paceLabel(pace),
-      description: paceDescription(pace),
-    })),
+    value: Math.min(max, Math.max(1, value)),
+    min: 1,
+    max,
   };
 }
 
-function paceLabel(pace: SecurityPace): string {
-  if (pace === "quiet") return "Quiet";
-  if (pace === "steady") return "Steady";
-  return "Aggressive";
-}
-
-function paceDescription(pace: SecurityPace): string {
-  if (pace === "quiet") return "One worker at a time, 30s between starts";
-  if (pace === "steady") return "Two workers, 30s between starts";
-  return "Four workers, no stagger";
+function clampScheduleToSlots(
+  schedule: ResolvedSecuritySchedule,
+  slots: readonly SecuritySlot[],
+): ResolvedSecuritySchedule {
+  const limit = workerLimit(slots);
+  if (schedule.maxParallel <= limit) return schedule;
+  return scheduleFromParallel(limit);
 }
 
 function reportStatusState(status: CampaignReport["status"]): CampaignWorkerState {
@@ -1039,6 +1065,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
   campaignComplete: boolean;
   slots: SecuritySlot[] | null;
   pace: SecurityPace | null;
+  parallel: number | null;
 } | null {
   if (!metadata) return null;
   const providerId = metadata.managerProvider;
@@ -1066,6 +1093,7 @@ function readManagerHandle(metadata: AgentMetadata | undefined): {
     campaignComplete: metadata.campaignComplete === true,
     slots: Array.isArray(metadata.slots) ? parseSlotsFeatureValue(metadata.slots) : null,
     pace: parsePace(metadata.pace),
+    parallel: parseParallel(metadata.parallel),
   };
 }
 

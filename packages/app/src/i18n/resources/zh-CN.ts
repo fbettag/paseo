@@ -215,6 +215,10 @@ export const zhCN: TranslationResources = {
       on: "开启",
       off: "关闭",
     },
+    stepper: {
+      decrease: "减少并行 worker",
+      increase: "增加并行 worker",
+    },
     slots: {
       search: "搜索模型...",
       clearSearch: "清除搜索",

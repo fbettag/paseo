@@ -7,7 +7,13 @@ import type {
 } from "@getpaseo/protocol/agent-types";
 import type { AgentProfile } from "@getpaseo/protocol/messages";
 import { formatAgentModeLabel, formatThinkingOptionLabel } from "@/agent-controls/labels";
-import { applyFeatureValues, pruneFeatureValues } from "@/hooks/feature-preferences";
+import {
+  applyFeatureValues,
+  featureValueUpdates,
+  pruneFeatureValues,
+  stepperPersistencePatch,
+  withParallelPreference,
+} from "@/hooks/feature-preferences";
 import { filterSelectableModels } from "@/provider-selection/model-catalog";
 
 /**
@@ -440,13 +446,23 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
     const featureRequestKey = buildFeatureRequestKey(featureRequest);
     const featuresAreCurrent =
       featureRequestKey !== null && featureRequestKey === resolvedFeatureKey;
-    const features = featuresAreCurrent
+    const overlaidFeatures = featuresAreCurrent
       ? applyFeatureValues(resolvedFeatures, next.featureValues)
       : [];
+    const stepperPatch = featuresAreCurrent
+      ? stepperPersistencePatch(overlaidFeatures, next.featureValues)
+      : null;
+    const featureValues = stepperPatch
+      ? { ...next.featureValues, ...stepperPatch }
+      : next.featureValues;
+    const features = stepperPatch
+      ? applyFeatureValues(resolvedFeatures, featureValues)
+      : overlaidFeatures;
     const featureResolution = resolveFeatureStatus(featureRequestKey, featuresAreCurrent);
 
     const withOptions: AgentProfileFormState = {
       ...next,
+      featureValues,
       providerOptions: buildProviderOptions(entries),
       modelOptions: buildModelOptions(models),
       modeOptions: buildModeOptions(modes),
@@ -539,7 +555,10 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
       resolvedFeatures = [...features];
       publish((current) => ({
         ...current,
-        featureValues: pruneFeatureValues(current.featureValues, resolvedFeatures),
+        featureValues: pruneFeatureValues(
+          withParallelPreference(resolvedFeatures, current.featureValues, current.featureValues),
+          resolvedFeatures,
+        ),
       }));
     },
     applyFeaturesUnavailable: (requestKey) => {
@@ -601,7 +620,10 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
     setFeatureValue: (featureId, value) =>
       publish((current) => ({
         ...current,
-        featureValues: { ...current.featureValues, [featureId]: value },
+        featureValues: {
+          ...current.featureValues,
+          ...featureValueUpdates(current.features, featureId, value),
+        },
       })),
     setSubmitting: (value) => publish((current) => ({ ...current, isSubmitting: value })),
     setSubmitError: (value) => publish((current) => ({ ...current, submitError: value })),

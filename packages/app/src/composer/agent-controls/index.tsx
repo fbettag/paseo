@@ -83,6 +83,8 @@ import { ComposerToolbarGlyph } from "@/composer/agent-controls/glyph";
 import { AgentControlTrigger } from "@/composer/agent-controls/control";
 import { CompactModelSheet } from "@/composer/agent-controls/model-sheet";
 import { SlotsFeatureItem } from "@/composer/agent-controls/slots-feature";
+import { StepperFeatureControl } from "@/composer/agent-controls/stepper-feature";
+import { featureValueUpdates } from "@/hooks/feature-preferences";
 import {
   useAgentProfileEditor,
   useAgentProfilePicker,
@@ -246,6 +248,9 @@ function featureControlPresence(feature: AgentFeature): ComposerFeatureControlPr
   }
   if (feature.type === "slots") {
     return { type: "slots", label: feature.label };
+  }
+  if (feature.type === "stepper") {
+    return { type: "stepper", label: feature.label };
   }
   const selectedOption = feature.options.find((option) => option.id === feature.value);
   return {
@@ -1343,6 +1348,17 @@ function DesktopFeatureItem({
     );
   }
 
+  if (feature.type === "stepper") {
+    return (
+      <StepperFeatureControl
+        feature={feature}
+        disabled={disabled}
+        onSetFeature={onSetFeature}
+        surface="toolbar"
+      />
+    );
+  }
+
   if (feature.type === "toggle") {
     const FeatureIcon = getAgentFeatureIcon(feature.icon);
     return (
@@ -1468,6 +1484,17 @@ function SheetFeatureItem({
         disabled={disabled}
         open={openSelector === featureSelector}
         onOpenChange={handleFeatureOpenChange}
+        onSetFeature={onSetFeature}
+        surface="sheet"
+      />
+    );
+  }
+
+  if (feature.type === "stepper") {
+    return (
+      <StepperFeatureControl
+        feature={feature}
+        disabled={disabled}
         onSetFeature={onSetFeature}
         surface="sheet"
       />
@@ -1725,25 +1752,26 @@ export const AgentControls = memo(function AgentControls({
       if (!client || !agentProvider) {
         return;
       }
+      const updates = featureValueUpdates(agent?.features ?? [], featureId, value);
       void updatePreferences((current) =>
         mergeProviderPreferences({
           preferences: current,
           provider: agentProvider,
           updates: {
-            featureValues: {
-              [featureId]: value,
-            },
+            featureValues: updates,
           },
         }),
       ).catch((error) => {
         console.warn("[AgentControls] persist feature preference failed", error);
       });
-      void client.setAgentFeature(agentId, featureId, value).catch((error) => {
-        console.warn("[AgentControls] setAgentFeature failed", error);
-        toast.error(toErrorMessage(error));
-      });
+      for (const [id, nextValue] of Object.entries(updates)) {
+        void client.setAgentFeature(agentId, id, nextValue).catch((error) => {
+          console.warn("[AgentControls] setAgentFeature failed", error);
+          toast.error(toErrorMessage(error));
+        });
+      }
     },
-    [agentId, agentProvider, client, toast, updatePreferences],
+    [agent?.features, agentId, agentProvider, client, toast, updatePreferences],
   );
 
   const commandCenterControls = useMemo<AgentControlCommandCenterSource>(

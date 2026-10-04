@@ -217,6 +217,10 @@ export const es: TranslationResources = {
       on: "En",
       off: "Apagado",
     },
+    stepper: {
+      decrease: "Reducir workers en paralelo",
+      increase: "Aumentar workers en paralelo",
+    },
     slots: {
       search: "Buscar modelos...",
       clearSearch: "Borrar búsqueda",

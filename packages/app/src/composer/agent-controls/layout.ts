@@ -11,7 +11,8 @@ export interface ComposerControlPresence {
 export type ComposerFeatureControlPresence =
   | { type: "toggle" }
   | { type: "select"; label: string }
-  | { type: "slots"; label: string };
+  | { type: "slots"; label: string }
+  | { type: "stepper"; label: string };
 
 export interface ComposerControlPresentation {
   showCarets: boolean;
@@ -51,6 +52,15 @@ function resolveFeatureControlWidth(
   fontScale: number,
 ): number {
   if (feature.type === "toggle") return COMPOSER_TOOLBAR_GEOMETRY.controlSize;
+  if (feature.type === "stepper") {
+    return (
+      COMPOSER_TOOLBAR_GEOMETRY.controlSize +
+      COMPOSER_TOOLBAR_GEOMETRY.iconLabelGap +
+      estimateLabelWidth(feature.label, fontScale) +
+      COMPOSER_TOOLBAR_GEOMETRY.controlSize * 2 +
+      COMPOSER_TOOLBAR_GEOMETRY.controlGap * 2
+    );
+  }
   return (
     COMPOSER_TOOLBAR_GEOMETRY.controlSize +
     COMPOSER_TOOLBAR_GEOMETRY.iconLabelGap +

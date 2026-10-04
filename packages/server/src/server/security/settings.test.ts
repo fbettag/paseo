@@ -8,6 +8,7 @@ import {
   resolveSessionSchedule,
   resolveSessionSlots,
   SECURITY_PACE_FEATURE_ID,
+  SECURITY_PARALLEL_FEATURE_ID,
   SECURITY_SLOTS_FEATURE_ID,
 } from "./settings.js";
 
@@ -91,16 +92,50 @@ describe("resolveSessionSlots", () => {
 });
 
 describe("resolveSessionSchedule", () => {
+  const quiet = { pace: "quiet" as const, maxParallel: 1, staggerMs: 30_000 };
+
   it("uses the session pace feature over provider params", () => {
+    expect(resolveSessionSchedule({ [SECURITY_PACE_FEATURE_ID]: "steady" }, quiet)).toEqual({
+      pace: "steady",
+      maxParallel: 2,
+      staggerMs: 30_000,
+    });
+  });
+
+  it("lets the parallel stepper win over a leftover pace", () => {
     expect(
       resolveSessionSchedule(
-        { [SECURITY_PACE_FEATURE_ID]: "steady" },
-        {
-          pace: "quiet",
-          maxParallel: 1,
-          staggerMs: 30_000,
-        },
+        { [SECURITY_PACE_FEATURE_ID]: "quiet", [SECURITY_PARALLEL_FEATURE_ID]: 3 },
+        quiet,
+        [
+          { model: "grok/grok-4.6", replicas: 2 },
+          { model: "glm/glm-5.3-flash", replicas: 2 },
+        ],
       ),
-    ).toEqual({ pace: "steady", maxParallel: 2, staggerMs: 30_000 });
+    ).toEqual({ pace: "steady", maxParallel: 3, staggerMs: 0 });
+  });
+
+  it("clamps parallel to the selected worker count", () => {
+    expect(
+      resolveSessionSchedule({ [SECURITY_PARALLEL_FEATURE_ID]: 6 }, quiet, [
+        { model: "glm/glm-5.3-flash", replicas: 2 },
+      ]),
+    ).toEqual({ pace: "steady", maxParallel: 2, staggerMs: 0 });
+  });
+
+  it("caps an empty slot list at the two manager copies", () => {
+    expect(resolveSessionSchedule({ [SECURITY_PARALLEL_FEATURE_ID]: 4 }, quiet, [])).toEqual({
+      pace: "steady",
+      maxParallel: 2,
+      staggerMs: 0,
+    });
+  });
+
+  it("waits between starts when parallel is 1", () => {
+    expect(
+      resolveSessionSchedule({ [SECURITY_PARALLEL_FEATURE_ID]: 1 }, quiet, [
+        { model: "grok/grok-4.6", replicas: 3 },
+      ]),
+    ).toEqual({ pace: "quiet", maxParallel: 1, staggerMs: 30_000 });
   });
 });

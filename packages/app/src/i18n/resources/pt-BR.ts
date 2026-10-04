@@ -216,6 +216,10 @@ export const ptBR: TranslationResources = {
       on: "Ativado",
       off: "Desativado",
     },
+    stepper: {
+      decrease: "Diminuir workers em paralelo",
+      increase: "Aumentar workers em paralelo",
+    },
     slots: {
       search: "Buscar modelos...",
       clearSearch: "Limpar busca",

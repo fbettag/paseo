@@ -6,8 +6,11 @@ import { useHostRuntimeClient, useHostRuntimeIsConnected } from "@/runtime/host-
 import { mergeProviderPreferences, useFormPreferences } from "./use-form-preferences";
 import {
   applyFeatureValues,
+  featureValueUpdates,
   pruneFeatureValues,
   resolveFeatureValues,
+  stepperPersistencePatch,
+  withParallelPreference,
 } from "./feature-preferences";
 
 type DraftFeatureConfig = Pick<
@@ -82,11 +85,15 @@ export function useDraftAgentFeatures(input: {
   const availableFeatures = useMemo(() => availableFeaturesRaw ?? [], [availableFeaturesRaw]);
   const featureValues = useMemo(
     () =>
-      resolveFeatureValues({
-        features: availableFeatures,
-        persistedFeatureValues,
-        localFeatureValues,
-      }),
+      withParallelPreference(
+        availableFeatures,
+        resolveFeatureValues({
+          features: availableFeatures,
+          persistedFeatureValues,
+          localFeatureValues,
+        }),
+        { ...persistedFeatureValues, ...localFeatureValues },
+      ),
     [availableFeatures, localFeatureValues, persistedFeatureValues],
   );
 
@@ -116,14 +123,34 @@ export function useDraftAgentFeatures(input: {
   }, [availableFeatures, availableFeaturesRaw, localFeatureValues]);
 
   const effectiveFeatureValues = Object.keys(featureValues).length > 0 ? featureValues : undefined;
+  useEffect(() => {
+    const patch = stepperPersistencePatch(features, featureValues);
+    if (!patch) return;
+    setLocalFeatureValues((current) => ({ ...current, ...patch }));
+    if (!provider) return;
+    void updatePreferences((current) =>
+      mergeProviderPreferences({
+        preferences: current,
+        provider,
+        updates: { featureValues: patch },
+      }),
+    ).catch((error) => {
+      console.warn("[useDraftAgentFeatures] persist stepper clamp failed", error);
+    });
+  }, [featureValues, features, provider, updatePreferences]);
+
   const setFeatureValue = useCallback(
     (featureId: string, value: unknown) => {
+      const updates = featureValueUpdates(features, featureId, value);
       setLocalFeatureValues((current) => {
-        if (Object.is(current[featureId], value)) {
-          return current;
+        let changed = false;
+        const next = { ...current };
+        for (const [id, nextValue] of Object.entries(updates)) {
+          if (Object.is(next[id], nextValue)) continue;
+          next[id] = nextValue;
+          changed = true;
         }
-
-        return { ...current, [featureId]: value };
+        return changed ? next : current;
       });
       if (!provider) {
         return;
@@ -132,17 +159,13 @@ export function useDraftAgentFeatures(input: {
         mergeProviderPreferences({
           preferences: current,
           provider,
-          updates: {
-            featureValues: {
-              [featureId]: value,
-            },
-          },
+          updates: { featureValues: updates },
         }),
       ).catch((error) => {
         console.warn("[useDraftAgentFeatures] persist feature preference failed", error);
       });
     },
-    [provider, updatePreferences],
+    [features, provider, updatePreferences],
   );
 
   const applyProfileFeatureValues = useCallback((values: Record<string, unknown>) => {

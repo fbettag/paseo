@@ -217,6 +217,10 @@ export const ja: TranslationResources = {
       on: "オン",
       off: "オフ",
     },
+    stepper: {
+      decrease: "並列ワーカーを減らす",
+      increase: "並列ワーカーを増やす",
+    },
     slots: {
       search: "モデルを検索...",
       clearSearch: "検索をクリア",

@@ -215,6 +215,10 @@ export const ko: TranslationResources = {
       on: "켜짐",
       off: "꺼짐",
     },
+    stepper: {
+      decrease: "병렬 워커 줄이기",
+      increase: "병렬 워커 늘리기",
+    },
     slots: {
       search: "모델 검색...",
       clearSearch: "검색 지우기",

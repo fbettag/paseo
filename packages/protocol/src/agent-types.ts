@@ -170,7 +170,24 @@ export interface AgentFeatureSlots {
   maxReplicas: number;
 }
 
-export type AgentFeature = AgentFeatureToggle | AgentFeatureSelect | AgentFeatureSlots;
+export interface AgentFeatureStepper {
+  type: "stepper";
+  id: string;
+  label: string;
+  description?: string;
+  tooltip?: string;
+  icon?: string;
+  desktopTrigger?: "icon" | "label";
+  value: number;
+  min: number;
+  max: number;
+}
+
+export type AgentFeature =
+  | AgentFeatureToggle
+  | AgentFeatureSelect
+  | AgentFeatureSlots
+  | AgentFeatureStepper;
 
 export interface AgentCapabilityFlags {
   [capability: string]: boolean | undefined;
