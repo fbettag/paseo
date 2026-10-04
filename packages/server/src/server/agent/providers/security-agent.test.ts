@@ -74,6 +74,10 @@ class FakeSession implements AgentSession {
     this.emit({ type: "turn_failed", provider: this.provider, error: "manager failed" });
   }
 
+  cancelTurn(): void {
+    this.emit({ type: "turn_canceled", provider: this.provider, reason: "interrupted" });
+  }
+
   subscribe(callback: (event: AgentStreamEvent) => void): () => void {
     this.listeners.add(callback);
     return () => {
@@ -655,6 +659,30 @@ describe("SecurityAgentClient", () => {
     expect(prompt).toContain("scan the engagement");
     expect(prompt).toContain("also check auth");
     expect(prompt).toContain("Manager brief:\nread the vercel headers first");
+  });
+
+  it("starts the next fleet after the operator stops the manager", async () => {
+    const harness = ports(new Set(), {}, { holdManagerTurn: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan vercel");
+    await session.interrupt();
+    harness.sessions[0]?.cancelTurn();
+    expect(harness.children).toHaveLength(0);
+    await session.startTurn("actually its firecracker");
+    harness.sessions[0]?.completeTurn("audit the jailer");
+    await waitFor(() => harness.children.length === 2);
+    const prompt = harness.children[0]?.initialPrompt ?? "";
+    expect(prompt).toContain("actually its firecracker");
+    expect(prompt).toContain("Manager brief:\naudit the jailer");
+    expect(prompt).not.toContain("scan vercel");
   });
 
   it("starts workers from the raw goal when the manager turn fails", async () => {
