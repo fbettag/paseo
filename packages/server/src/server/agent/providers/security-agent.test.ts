@@ -108,7 +108,7 @@ const MODELS: EnabledModel[] = [
 function ports(
   blocked: ReadonlySet<string> = new Set(),
   runErrors: Readonly<Record<string, Error>> = {},
-  options: { holdWorkers?: boolean } = {},
+  options: { holdWorkers?: boolean; promptThrows?: boolean } = {},
 ): {
   ports: JevRouterPorts;
   opened: Array<{ providerId: string; model?: string; internal?: boolean }>;
@@ -165,7 +165,8 @@ function ports(
           grok: [{ id: "full-access" }],
           glm: [{ id: "bypassPermissions" }],
         }),
-      createChildAgent: (input) => createFakeChild(input, children, runErrors, options.holdWorkers),
+      createChildAgent: (input) =>
+        createFakeChild(input, children, runErrors, options.holdWorkers, options.promptThrows),
     },
   };
 }
@@ -181,6 +182,7 @@ function createFakeChild(
   }>,
   runErrors: Readonly<Record<string, Error>>,
   holdWorkers?: boolean,
+  promptThrows?: boolean,
 ): Promise<ChildAgentHandle> {
   const parsed = parseModelRef(input.provider);
   const providerId = parsed?.providerId ?? input.provider;
@@ -210,6 +212,7 @@ function createFakeChild(
     },
     prompt: async (text) => {
       record.prompts.push(text);
+      if (promptThrows) throw new Error("already has an active run");
     },
     interrupt: async () => undefined,
   });
@@ -509,6 +512,55 @@ describe("SecurityAgentClient", () => {
     expect(harness.children[1]?.prompts).toContain("continue with a 2nd account");
     for (const child of harness.children) child.finish();
     await waitFor(() => noticesInclude(notices, "completed"));
+  });
+
+  it("does not treat a worker finish notice as a campaign follow-up", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, LIVE_FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 2);
+    const notice =
+      "<paseo-system>\nAgent child-1 (Security · grok/grok-4.6 #1) errored.\n</paseo-system>";
+    if (!session.steerActiveTurn) throw new Error("security session does not steer");
+    await session.steerActiveTurn(notice, { expectedTurnId: "turn-1" });
+    for (const child of harness.children) {
+      expect(child.prompts).not.toContain(notice);
+    }
+    for (const child of harness.children) child.finish();
+  });
+
+  it("reports a busy worker instead of rejecting the follow-up", async () => {
+    const harness = ports(new Set(), {}, { holdWorkers: true, promptThrows: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, LIVE_FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    const notices: string[] = [];
+    session.subscribe((event) => {
+      if (event.type === "timeline" && event.item.type === "notification") {
+        notices.push(event.item.message);
+      }
+    });
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 2);
+    await expect(session.startTurn("continue with a 2nd account")).resolves.toEqual({
+      turnId: "turn-2",
+    });
+    await waitFor(() => noticesInclude(notices, "follow-up was not delivered"));
+    for (const child of harness.children) child.finish();
   });
 
   it("starts one quiet worker at a time", async () => {
