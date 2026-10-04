@@ -1,7 +1,21 @@
 import type { AgentInfo, ModelInfo, ModelRef, SessionInfo } from "@opencode/client";
 import type { AgentMode, AgentModelDefinition, AgentUsage } from "../../../agent-sdk-types.js";
+import { resolveOpenCodeModel } from "../model-ref.js";
 
-export function modelRef(id: string, variant?: string | null): ModelRef {
+export function modelRef(
+  id: string,
+  variant?: string | null,
+  catalogProviderId?: string,
+): ModelRef {
+  if (catalogProviderId && catalogProviderId !== "opencode") {
+    const resolved = resolveOpenCodeModel(id, catalogProviderId);
+    if (!resolved) throw new Error("OpenCode model must be provider/model");
+    return {
+      providerID: resolved.providerID,
+      id: resolved.modelID,
+      ...(variant ? { variant } : {}),
+    };
+  }
   const slash = id.indexOf("/");
   if (slash < 1 || slash === id.length - 1)
     throw new Error("OpenCode model must be provider/model");

@@ -91,6 +91,7 @@ import {
   type OpenCodeEventSourceInput,
 } from "./opencode/event-consumer.js";
 import { resolveOpenCodeHomeDir } from "./opencode/paths.js";
+import { resolveOpenCodeModel } from "./opencode/model-ref.js";
 import {
   formatProviderDiagnostic,
   formatProviderDiagnosticError,
@@ -1399,6 +1400,11 @@ interface OpenCodeAgentClientDeps {
   resolveHomeDir?: () => string;
   managedProcesses?: ManagedProcessRegistry;
   bridge?: OpenCodeBridge;
+  customProvider?: {
+    id: string;
+    label: string;
+    extends: string;
+  };
 }
 
 type OpenCodeClientFactory = (options: { baseUrl: string; directory: string }) => OpencodeClient;
@@ -1420,6 +1426,7 @@ export class OpenCodeAgentClient implements AgentClient {
   private readonly runtimeSettings?: ProviderRuntimeSettings;
   private readonly modelContextWindows = new Map<string, number>();
   private readonly bridge?: OpenCodeBridge;
+  private readonly catalogProviderId?: string;
 
   constructor(
     logger: Logger,
@@ -1428,6 +1435,10 @@ export class OpenCodeAgentClient implements AgentClient {
   ) {
     this.logger = logger.child({ module: "agent", provider: "opencode" });
     this.bridge = deps.bridge;
+    this.catalogProviderId =
+      deps.customProvider && deps.customProvider.id !== "opencode"
+        ? deps.customProvider.id
+        : undefined;
     this.capabilities = {
       ...OPENCODE_CAPABILITIES,
       ...(this.bridge ? { supportsNativePaseoTools: true } : {}),
@@ -1513,6 +1524,7 @@ export class OpenCodeAgentClient implements AgentClient {
         false,
         unbindBridge,
         connectServer,
+        this.catalogProviderId,
       );
     } catch (error) {
       await connection.release();
@@ -1568,6 +1580,7 @@ export class OpenCodeAgentClient implements AgentClient {
         registeredAcquisition !== null,
         unbindBridge,
         connectServer,
+        this.catalogProviderId,
       );
     } catch (error) {
       await connection.release();
@@ -3470,6 +3483,7 @@ class OpenCodeAgentSession implements AgentSession {
     private readonly externallyDriven = false,
     releaseBridge?: () => void,
     connectServer?: () => Promise<OpenCodeServerConnection>,
+    private readonly catalogProviderId?: string,
   ) {
     this.config = config;
     this.server = {
@@ -5152,14 +5166,7 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   private parseModel(model?: string): { providerID: string; modelID: string } | undefined {
-    if (!model) {
-      return undefined;
-    }
-    const parts = model.split("/");
-    if (parts.length >= 2) {
-      return { providerID: parts[0], modelID: parts.slice(1).join("/") };
-    }
-    return { providerID: "opencode", modelID: model };
+    return resolveOpenCodeModel(model, this.catalogProviderId);
   }
 
   private async ensureMcpServersConfigured(): Promise<void> {

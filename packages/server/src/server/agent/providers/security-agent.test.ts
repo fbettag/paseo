@@ -33,17 +33,20 @@ class FakeSession implements AgentSession {
   readonly capabilities = CAPABILITIES;
   readonly id = "native-1";
   readonly prompts: string[] = [];
+  private readonly listeners = new Set<(event: AgentStreamEvent) => void>();
 
   constructor(
     readonly provider: string,
     readonly model: string | undefined,
     readonly internal: boolean,
     private readonly runError?: Error,
+    private readonly holdTurn = false,
   ) {}
 
   async run(prompt: AgentPromptInput): Promise<AgentRunResult> {
     this.prompts.push(typeof prompt === "string" ? prompt : "");
     if (this.runError) throw this.runError;
+    if (!this.holdTurn) this.completeTurn();
     return { sessionId: this.id, finalText: "done", timeline: [] };
   }
 
@@ -52,11 +55,34 @@ class FakeSession implements AgentSession {
     _options?: AgentRunOptions,
   ): Promise<{ turnId: string }> {
     this.prompts.push(typeof prompt === "string" ? prompt : "");
+    if (!this.holdTurn) this.completeTurn();
     return { turnId: `turn-${this.prompts.length}` };
   }
 
-  subscribe(): () => void {
-    return () => undefined;
+  completeTurn(brief?: string): void {
+    if (brief) {
+      this.emit({
+        type: "timeline",
+        provider: this.provider,
+        item: { type: "assistant_message", text: brief },
+      });
+    }
+    this.emit({ type: "turn_completed", provider: this.provider });
+  }
+
+  failTurn(): void {
+    this.emit({ type: "turn_failed", provider: this.provider, error: "manager failed" });
+  }
+
+  subscribe(callback: (event: AgentStreamEvent) => void): () => void {
+    this.listeners.add(callback);
+    return () => {
+      this.listeners.delete(callback);
+    };
+  }
+
+  private emit(event: AgentStreamEvent): void {
+    for (const listener of this.listeners) listener(event);
   }
 
   async *streamHistory(): AsyncGenerator<AgentStreamEvent> {}
@@ -108,7 +134,7 @@ const MODELS: EnabledModel[] = [
 function ports(
   blocked: ReadonlySet<string> = new Set(),
   runErrors: Readonly<Record<string, Error>> = {},
-  options: { holdWorkers?: boolean; promptThrows?: boolean } = {},
+  options: { holdWorkers?: boolean; promptThrows?: boolean; holdManagerTurn?: boolean } = {},
 ): {
   ports: JevRouterPorts;
   opened: Array<{ providerId: string; model?: string; internal?: boolean }>;
@@ -151,6 +177,7 @@ function ports(
           config.model,
           config.internal === true,
           runErrors[providerId],
+          options.holdManagerTurn === true,
         );
         sessions.push(session);
         return Promise.resolve(session);
@@ -561,6 +588,93 @@ describe("SecurityAgentClient", () => {
     });
     await waitFor(() => noticesInclude(notices, "follow-up was not delivered"));
     for (const child of harness.children) child.finish();
+  });
+
+  it("drops a stored slot whose id is not a current option", async () => {
+    const harness = ports();
+    const stale = "orcarouter/orcarouter/orcarouter/free";
+    const featureValues = {
+      slots: [
+        { model: stale, replicas: 2 },
+        { model: "grok/grok-4.6", replicas: 1 },
+      ],
+    };
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, {
+      ...FLEET,
+      slots: [{ model: stale, replicas: 2 }],
+    });
+    const listed = await client.listFeatures({
+      provider: "security",
+      cwd: "/tmp/repo",
+      featureValues,
+    });
+    const listedSlots = listed.find((feature) => feature.id === "slots");
+    expect(listedSlots?.type).toBe("slots");
+    if (listedSlots?.type !== "slots") throw new Error("Expected slots feature");
+    expect(listedSlots.value).toEqual([{ model: "grok/grok-4.6", replicas: 1 }]);
+
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+        featureValues,
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    await waitFor(() => harness.children.length === 1);
+    expect(harness.children.map((child) => child.provider)).toEqual(["grok/grok-4.6"]);
+    if (!session.setFeature) throw new Error("Security session is missing setFeature");
+    await session.setFeature("slots", [
+      { model: stale, replicas: 2 },
+      { model: "glm/glm-5.3-flash", replicas: 1 },
+    ]);
+    const slotsFeature = session.features?.[0];
+    if (slotsFeature?.type !== "slots") throw new Error("Expected slots feature");
+    expect(slotsFeature.value).toEqual([{ model: "glm/glm-5.3-flash", replicas: 1 }]);
+  });
+
+  it("waits for the manager brief before starting workers", async () => {
+    const harness = ports(new Set(), {}, { holdManagerTurn: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    await session.startTurn("also check auth");
+    expect(harness.children).toHaveLength(0);
+    harness.sessions[0]?.completeTurn("read the vercel headers first");
+    await waitFor(() => harness.children.length === 2);
+    const prompt = harness.children[0]?.initialPrompt ?? "";
+    expect(prompt).toContain("scan the engagement");
+    expect(prompt).toContain("also check auth");
+    expect(prompt).toContain("Manager brief:\nread the vercel headers first");
+  });
+
+  it("starts workers from the raw goal when the manager turn fails", async () => {
+    const harness = ports(new Set(), {}, { holdManagerTurn: true });
+    const client = new SecurityAgentClient(createTestLogger(), harness.ports, FLEET);
+    const session = await client.createSession(
+      {
+        provider: "security",
+        cwd: "/tmp/repo",
+        model: "grok/grok-4.6",
+      },
+      PARENT_LAUNCH,
+    );
+    await session.startTurn("scan the engagement");
+    expect(harness.children).toHaveLength(0);
+    harness.sessions[0]?.failTurn();
+    await waitFor(() => harness.children.length === 2);
+    const prompt = harness.children[0]?.initialPrompt ?? "";
+    expect(prompt).toContain("scan the engagement");
+    expect(prompt).not.toContain("Manager brief:");
   });
 
   it("starts one quiet worker at a time", async () => {

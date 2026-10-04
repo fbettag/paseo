@@ -11,7 +11,7 @@ import {
   applyFeatureValues,
   featureValueUpdates,
   pruneFeatureValues,
-  stepperPersistencePatch,
+  featurePersistencePatch,
   withParallelPreference,
 } from "@/hooks/feature-preferences";
 import { filterSelectableModels } from "@/provider-selection/model-catalog";
@@ -449,13 +449,13 @@ export function openAgentProfileForm(snapshot: AgentProfileFormSnapshot): AgentP
     const overlaidFeatures = featuresAreCurrent
       ? applyFeatureValues(resolvedFeatures, next.featureValues)
       : [];
-    const stepperPatch = featuresAreCurrent
-      ? stepperPersistencePatch(overlaidFeatures, next.featureValues)
+    const persistencePatch = featuresAreCurrent
+      ? featurePersistencePatch(overlaidFeatures, next.featureValues)
       : null;
-    const featureValues = stepperPatch
-      ? { ...next.featureValues, ...stepperPatch }
+    const featureValues = persistencePatch
+      ? { ...next.featureValues, ...persistencePatch }
       : next.featureValues;
-    const features = stepperPatch
+    const features = persistencePatch
       ? applyFeatureValues(resolvedFeatures, featureValues)
       : overlaidFeatures;
     const featureResolution = resolveFeatureStatus(featureRequestKey, featuresAreCurrent);

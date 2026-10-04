@@ -69,6 +69,7 @@ export class OpenCodeV2Session implements AgentSession {
     bindChild?: (id: string) => void,
     private readonly acquire?: () => Promise<V2Connection>,
     private readonly moved?: (connection: V2Connection) => void,
+    private readonly catalogProviderId?: string,
   ) {
     this.permissions = new SessionPermissions(
       () => this.client,
@@ -295,7 +296,9 @@ export class OpenCodeV2Session implements AgentSession {
   async setModel(model: string | null) {
     await this.reconnectIfExited();
     const location = { directory: this.config.cwd };
-    const selected = model ? modelRef(model) : (await this.client.model.default({ location })).data;
+    const selected = model
+      ? modelRef(model, undefined, this.catalogProviderId)
+      : (await this.client.model.default({ location })).data;
     if (!selected) throw new Error("OpenCode has no default model");
     const catalog = await this.client.model.list({ location });
     const target = catalog.data.find(
