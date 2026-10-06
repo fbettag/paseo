@@ -92,6 +92,12 @@ import {
 import { resolveOpenCodeHomeDir } from "./opencode/paths.js";
 import { resolveOpenCodeModel } from "./opencode/model-ref.js";
 import {
+  PENTESTCODE_MODE_FEATURE_ID,
+  pentestcodeFeatures,
+  pentestcodeMode,
+  pentestcodeRunConfig,
+} from "./opencode/pentestcode-run.js";
+import {
   formatProviderDiagnostic,
   formatProviderDiagnosticError,
   buildBinaryDiagnosticRows,
@@ -1481,6 +1487,13 @@ export class OpenCodeAgentClient implements AgentClient {
     );
 
     try {
+      const pentestcodeRun =
+        this.catalogProviderId === "pentestcode"
+          ? pentestcodeRunConfig(
+              openCodeConfig,
+              await this.fetchModelsFromClient(client, openCodeConfig.cwd),
+            )
+          : undefined;
       // Creating the first session for a directory is part of OpenCode coming up, so it
       // shares the server startup budget instead of a shorter one that fails agent
       // creation on contended cold starts.
@@ -1488,7 +1501,10 @@ export class OpenCodeAgentClient implements AgentClient {
         client.session.create({
           directory: openCodeConfig.cwd,
           ...(permission ? { permission } : {}),
-        }),
+          ...(pentestcodeRun
+            ? { metadata: { pentestcodeRun, pentestcodeMode: pentestcodeRun.mode } }
+            : {}),
+        } as Parameters<typeof client.session.create>[0]),
         OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
         `OpenCode session.create timed out after ${Math.round(
           OPENCODE_SERVER_STARTUP_TIMEOUT_MS / 1000,
@@ -1559,6 +1575,19 @@ export class OpenCodeAgentClient implements AgentClient {
 
     try {
       await this.applySessionPermissionRules(client, openCodeConfig, handle.sessionId);
+      if (this.catalogProviderId === "pentestcode") {
+        const response = await client.session.get({ sessionID: handle.sessionId, directory: cwd });
+        if (response.error || !response.data)
+          throw new Error("Failed to resume Pentestcode session");
+        const mode = (response.data as unknown as { metadata?: Record<string, unknown> }).metadata
+          ?.pentestcodeMode;
+        if (mode === "auto" || mode === "free" || mode === "guided") {
+          openCodeConfig.featureValues = {
+            ...openCodeConfig.featureValues,
+            [PENTESTCODE_MODE_FEATURE_ID]: mode,
+          };
+        }
+      }
       await this.populateModelContextWindowCache(client, openCodeConfig.cwd);
       const unbindBridge = this.bindBridgeSession(handle.sessionId, launchContext);
 
@@ -1700,6 +1729,14 @@ export class OpenCodeAgentClient implements AgentClient {
   }
 
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
+    if (this.catalogProviderId === "pentestcode") {
+      const catalog = await this.fetchCatalog({
+        scope: "workspace",
+        cwd: config.cwd,
+        force: false,
+      });
+      return pentestcodeFeatures(config, catalog.models);
+    }
     return [buildOpenCodeAutoAcceptFeature(this.assertConfig(config))];
   }
 
@@ -3482,7 +3519,10 @@ class OpenCodeAgentSession implements AgentSession {
     this.logger = logger.child({ agentId: this.agentId });
     this.modelContextWindowsByModelKey = modelContextWindowsByModelKey;
     this.currentMode = normalizeOpenCodeModeId(config.modeId);
-    this.autoAcceptEnabled = !config.toolPolicy && isOpenCodeAutoAcceptEnabled(config);
+    this.autoAcceptEnabled =
+      !config.toolPolicy &&
+      isOpenCodeAutoAcceptEnabled(config) &&
+      !(this.catalogProviderId === "pentestcode" && pentestcodeMode(config) === "guided");
     this.releaseBridge = releaseBridge ?? null;
     this.persistSession = persistSession;
     this.selectedModelContextWindowMaxTokens = this.resolveConfiguredModelContextWindowMaxTokens(
@@ -3566,6 +3606,21 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   get features(): AgentFeature[] {
+    if (this.catalogProviderId === "pentestcode") {
+      return [
+        {
+          type: "select",
+          id: PENTESTCODE_MODE_FEATURE_ID,
+          label: "Autonomy",
+          value: pentestcodeMode(this.config),
+          options: [
+            { id: "auto", label: "Auto" },
+            { id: "free", label: "Free" },
+            { id: "guided", label: "Guided" },
+          ],
+        },
+      ];
+    }
     return [buildOpenCodeAutoAcceptFeature(this.config)];
   }
 
@@ -4974,12 +5029,45 @@ class OpenCodeAgentSession implements AgentSession {
   }
 
   async setFeature(featureId: string, value: unknown): Promise<void> {
+    if (this.catalogProviderId === "pentestcode" && featureId === PENTESTCODE_MODE_FEATURE_ID) {
+      const nextConfig = {
+        ...this.config,
+        featureValues: { ...this.config.featureValues, [featureId]: value },
+      };
+      const mode = pentestcodeMode(nextConfig);
+      await this.reconnectIfServerExited();
+      const current = await this.client.session.get({
+        sessionID: this.sessionId,
+        directory: this.config.cwd,
+      });
+      if (current.error || !current.data)
+        throw new Error("Failed to load Pentestcode session metadata");
+      const metadata = {
+        ...(current.data as unknown as { metadata?: Record<string, unknown> }).metadata,
+        pentestcodeMode: mode,
+      };
+      const response = await this.client.session.update({
+        sessionID: this.sessionId,
+        directory: this.config.cwd,
+        metadata,
+      } as Parameters<typeof this.client.session.update>[0]);
+      if (response.error)
+        throw new Error(
+          `Failed to set Pentestcode mode: ${toDiagnosticErrorMessage(response.error)}`,
+        );
+      this.config.featureValues = nextConfig.featureValues;
+      this.autoAcceptEnabled =
+        !this.config.toolPolicy && mode !== "guided" && isOpenCodeAutoAcceptEnabled(this.config);
+      return;
+    }
     if (featureId !== OPENCODE_AUTO_ACCEPT_FEATURE_ID) {
       throw new Error(`Unsupported OpenCode feature '${featureId}'`);
     }
 
     const enabled = value === true;
-    this.autoAcceptEnabled = enabled;
+    this.autoAcceptEnabled =
+      enabled &&
+      !(this.catalogProviderId === "pentestcode" && pentestcodeMode(this.config) === "guided");
     this.config.featureValues = {
       ...this.config.featureValues,
       [OPENCODE_AUTO_ACCEPT_FEATURE_ID]: enabled,
