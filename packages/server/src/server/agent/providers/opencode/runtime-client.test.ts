@@ -18,6 +18,22 @@ test.each(["3.0.0", "2.0.9", "2.0.7", "2.0.4", "2.0.3", "v2.0.1"])(
   },
 );
 
+test("uses the OpenCode v1 API for Pentestcode's independent version sequence", async () => {
+  const { OpenCodeRuntimeClient } = await import("./runtime-client.js");
+  const { OpenCodeAgentClient } = await import("../opencode-agent.js");
+  const { createTestLogger } = await import("../../../../test-utils/test-logger.js");
+  const client = new OpenCodeRuntimeClient(
+    createTestLogger(),
+    { command: { mode: "replace", argv: [process.execPath, "-e", 'console.log("2.0.10")'] } },
+    { customProvider: { id: "pentestcode", label: "Pentestcode", extends: "opencode" } },
+  );
+  try {
+    expect(await client["client"]()).toBeInstanceOf(OpenCodeAgentClient);
+  } finally {
+    await client.shutdown();
+  }
+});
+
 test("records the runtime once and retains its position across resume", async () => {
   const { withOpenCodeRuntimeNotice } = await import("./runtime-notice.js");
   const { V2Harness } = await import("./test-utils/v2-harness.js");
