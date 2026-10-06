@@ -78,7 +78,7 @@ export interface OpenCodeServerManagerOptions {
 }
 
 export class OpenCodeServerManager implements OpenCodeServerManagerLike {
-  private static instance: OpenCodeServerManager | null = null;
+  private static instances = new Map<string, OpenCodeServerManager>();
   private static exitHandlerRegistered = false;
   private currentServer: OpenCodeServerGeneration | null = null;
   private retiredServers = new Set<OpenCodeServerGeneration>();
@@ -87,7 +87,6 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
   private readonly logger: Logger;
   private readonly baseEnv?: SpawnProcessOptions["baseEnv"];
   private readonly runtimeSettings?: ProviderRuntimeSettings;
-  private readonly runtimeSettingsKey: string;
   private readonly managedProcesses?: ManagedProcessRegistry;
   private readonly terminateProcess: ProcessTerminator;
   private readonly portAllocator: OpenCodePortAllocator;
@@ -101,7 +100,6 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     this.logger = options.logger;
     this.baseEnv = options.baseEnv;
     this.runtimeSettings = options.runtimeSettings;
-    this.runtimeSettingsKey = JSON.stringify(this.runtimeSettings ?? {});
     this.managedProcesses = options.managedProcesses;
     this.terminateProcess = options.terminateProcess ?? terminateWithTreeKill;
     this.portAllocator = options.portAllocator ?? findAvailablePort;
@@ -119,25 +117,20 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     logger: Logger,
     runtimeSettings?: ProviderRuntimeSettings,
     options: Omit<OpenCodeServerManagerOptions, "logger" | "runtimeSettings"> = {},
+    providerId = "opencode",
   ): OpenCodeServerManager {
-    const nextSettingsKey = JSON.stringify(runtimeSettings ?? {});
-    if (!OpenCodeServerManager.instance) {
-      OpenCodeServerManager.instance = new OpenCodeServerManager({
+    const key = JSON.stringify([providerId, runtimeSettings ?? {}]);
+    let instance = OpenCodeServerManager.instances.get(key);
+    if (!instance) {
+      instance = new OpenCodeServerManager({
         logger,
         runtimeSettings,
         ...options,
       });
+      OpenCodeServerManager.instances.set(key, instance);
       OpenCodeServerManager.registerExitHandler();
-    } else if (OpenCodeServerManager.instance.runtimeSettingsKey !== nextSettingsKey) {
-      logger.warn(
-        {
-          existingRuntimeSettings: OpenCodeServerManager.instance.runtimeSettingsKey,
-          requestedRuntimeSettings: nextSettingsKey,
-        },
-        "OpenCode server manager already initialized with different runtime settings",
-      );
     }
-    return OpenCodeServerManager.instance;
+    return instance;
   }
 
   private static registerExitHandler(): void {
@@ -147,8 +140,9 @@ export class OpenCodeServerManager implements OpenCodeServerManagerLike {
     OpenCodeServerManager.exitHandlerRegistered = true;
 
     const cleanup = () => {
-      const instance = OpenCodeServerManager.instance;
-      void instance?.shutdown();
+      for (const instance of OpenCodeServerManager.instances.values()) {
+        void instance.shutdown();
+      }
     };
 
     process.on("exit", cleanup);

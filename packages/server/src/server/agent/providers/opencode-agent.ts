@@ -1452,20 +1452,25 @@ export class OpenCodeAgentClient implements AgentClient {
     this.createOpenCodeClient = deps.createClient ?? createSdkOpenCodeClient;
     this.serverManager =
       deps.serverManager ??
-      OpenCodeServerManager.getInstance(this.logger, runtimeSettings, {
-        managedProcesses: deps.managedProcesses,
-        resolveHomeDir: deps.resolveHomeDir,
-        createEventSource: ({ serverUrl, processExit, logger: eventLogger }) =>
-          new OpenCodeEventConsumer({
-            serverUrl,
-            processExit,
-            logger: eventLogger,
-            createClient: (baseUrl) => this.createOpenCodeClient({ baseUrl, directory: "" }),
-          }),
-        decorateServerEnv: this.bridge
-          ? (env) => this.bridge?.decorateServerEnv(env) ?? env
-          : undefined,
-      });
+      OpenCodeServerManager.getInstance(
+        this.logger,
+        runtimeSettings,
+        {
+          managedProcesses: deps.managedProcesses,
+          resolveHomeDir: deps.resolveHomeDir,
+          createEventSource: ({ serverUrl, processExit, logger: eventLogger }) =>
+            new OpenCodeEventConsumer({
+              serverUrl,
+              processExit,
+              logger: eventLogger,
+              createClient: (baseUrl) => this.createOpenCodeClient({ baseUrl, directory: "" }),
+            }),
+          decorateServerEnv: this.bridge
+            ? (env) => this.bridge?.decorateServerEnv(env) ?? env
+            : undefined,
+        },
+        this.catalogProviderId ?? "opencode",
+      );
     this.resolveHomeDir = deps.resolveHomeDir ?? resolveOpenCodeHomeDir;
   }
 

@@ -29,6 +29,34 @@ afterEach(() => {
 });
 
 describe("OpenCodeServerManager generations", () => {
+  test("keeps custom provider servers separate from OpenCode and from other runtimes", () => {
+    const logger = createTestLogger();
+    const opencode = OpenCodeServerManager.getInstance(logger);
+    const pentestcode = OpenCodeServerManager.getInstance(
+      logger,
+      { command: { mode: "replace", argv: ["/bin/pentestcode"] } },
+      {},
+      "pentestcode",
+    );
+    const otherRuntime = OpenCodeServerManager.getInstance(
+      logger,
+      { command: { mode: "replace", argv: ["/bin/other"] } },
+      {},
+      "pentestcode",
+    );
+
+    expect(pentestcode).not.toBe(opencode);
+    expect(otherRuntime).not.toBe(pentestcode);
+    expect(
+      OpenCodeServerManager.getInstance(
+        logger,
+        { command: { mode: "replace", argv: ["/bin/pentestcode"] } },
+        {},
+        "pentestcode",
+      ),
+    ).toBe(pentestcode);
+  });
+
   test("logs generation lifecycle transitions", async () => {
     const { logger, records } = createCapturingLogger();
     const { manager } = createTestManager([4081, 4082], { logger });
