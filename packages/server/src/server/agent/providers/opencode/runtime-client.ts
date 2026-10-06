@@ -68,6 +68,11 @@ export class OpenCodeRuntimeClient implements AgentClient {
     this.isCreateConfigUnattended = this.legacy.isCreateConfigUnattended;
   }
   private client(): Promise<OpenCodeAgentClient | OpenCodeV2AgentClient> {
+    if (this.options.customProvider?.id === "pentestcode") {
+      // Pentestcode has its own version sequence and exposes the OpenCode v1 API.
+      this.legacySelected = true;
+      return (this.selected ??= Promise.resolve(this.legacy));
+    }
     this.selected ??= (async () => {
       let output: string;
       try {
