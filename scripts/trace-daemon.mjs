@@ -64,11 +64,26 @@ const additionalInputs = [
   "packages/server/.env.example",
   // CLI shebang script wrapping dist/index.js
   "packages/cli/bin/paseo",
-  // node-pty's compiled native addon. nft can't trace it because
-  // node-pty loads it via `require(path.join(__dirname, 'prebuilds/<plat>/pty.node'))`
-  // with a runtime-computed platform suffix. Pin to the host platform —
-  // the Nix derivation builds for one platform at a time and ships only
-  // its own binaries.
+  // node-pty's compiled native addon. nft can't trace it: node-pty resolves it
+  // at runtime, checking build/Release, build/Debug and prebuilds/<plat> in
+  // turn. Two things have to be right here, and both were wrong before.
+  //
+  // Location: node-pty is a dependency of packages/server only, so npm keeps
+  // it in that workspace rather than hoisting it to the root. A root-relative
+  // pattern matched nothing. Both roots are listed so a future hoist still
+  // works.
+  //
+  // Variant: dependencies are fetched with --ignore-scripts (onnxruntime-node
+  // would download during install), so no prebuild is ever unpacked and the
+  // buildPhase's `npm rebuild node-pty` compiles into build/Release instead.
+  // Shipping prebuilds/ alone left pty.node and the Linux spawn-helper behind,
+  // which broke every terminal and every PTY-spawned agent provider.
+  //
+  // prebuilds/ stays pinned to the host platform — the derivation builds for
+  // one platform at a time and ships only its own binaries.
+  "packages/server/node_modules/node-pty/build/Release/**",
+  `packages/server/node_modules/node-pty/prebuilds/${process.platform}-${process.arch}/**`,
+  "node_modules/node-pty/build/Release/**",
   `node_modules/node-pty/prebuilds/${process.platform}-${process.arch}/**`,
   // sherpa-onnx-node dynamically resolves a platform-specific native package.
   // Copy the wrapper plus the host platform package explicitly.
