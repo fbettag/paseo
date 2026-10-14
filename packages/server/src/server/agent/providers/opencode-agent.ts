@@ -3638,6 +3638,11 @@ class OpenCodeAgentSession implements AgentSession {
 
   get features(): AgentFeature[] {
     if (this.catalogProviderId === "pentestcode") {
+      // Autonomy and auto-accept are independent: autonomy picks how much the
+      // lead plans for itself, auto-accept decides whether tool calls still
+      // need approval. Returning only autonomy dropped the permission toggle
+      // this provider otherwise has, even though the auto-accept state is
+      // already honoured below (and forced off in guided mode).
       return [
         {
           type: "select",
@@ -3650,6 +3655,7 @@ class OpenCodeAgentSession implements AgentSession {
             { id: "guided", label: "Guided" },
           ],
         },
+        buildOpenCodeAutoAcceptFeature(this.config),
       ];
     }
     return [buildOpenCodeAutoAcceptFeature(this.config)];
@@ -5077,11 +5083,15 @@ class OpenCodeAgentSession implements AgentSession {
         ...(current.data as unknown as { metadata?: Record<string, unknown> }).metadata,
         pentestcodeMode: mode,
       };
+      // session.update is a PATCH with a path parameter, so it needs the SDK's
+      // path/query/body shape. Passing the payload flat sent no body at all and
+      // the server rejected it with "Expected object, got undefined", which made
+      // every Pentestcode mode switch fail.
       const response = await this.client.session.update({
-        sessionID: this.sessionId,
-        directory: this.config.cwd,
-        metadata,
-      } as Parameters<typeof this.client.session.update>[0]);
+        path: { id: this.sessionId },
+        query: { directory: this.config.cwd },
+        body: { metadata },
+      } as unknown as Parameters<typeof this.client.session.update>[0]);
       if (response.error)
         throw new Error(
           `Failed to set Pentestcode mode: ${toDiagnosticErrorMessage(response.error)}`,
