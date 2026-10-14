@@ -28,6 +28,21 @@ describe("resolveOpenCodeModel", () => {
     });
   });
 
+  it("lets a multi-provider fork's inner id choose the provider", () => {
+    expect(resolveOpenCodeModel("qwen/glm-5.3", "pentestcode")).toEqual({
+      providerID: "qwen",
+      modelID: "glm-5.3",
+    });
+    expect(resolveOpenCodeModel("pentestcode/qwen/glm-5.3", "pentestcode")).toEqual({
+      providerID: "qwen",
+      modelID: "glm-5.3",
+    });
+    expect(resolveOpenCodeModel("orcarouter/kimi/kimi-k3", "pentestcode")).toEqual({
+      providerID: "orcarouter",
+      modelID: "kimi/kimi-k3",
+    });
+  });
+
   it("unwraps a direct picker id without doubling the provider", () => {
     expect(resolveOpenCodeModel("orcarouter/tencent/hy4-preview", "orcarouter")).toEqual({
       providerID: "orcarouter",
