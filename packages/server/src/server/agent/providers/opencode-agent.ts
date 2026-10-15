@@ -12,6 +12,8 @@ import {
   type TextPartInput as OpenCodeTextPartInput,
 } from "@opencode-ai/sdk/v2/client";
 import fs from "node:fs/promises";
+import nodeFs from "node:fs";
+import nodePath from "node:path";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { createPathEquivalenceMatcher } from "../../../utils/path.js";
@@ -94,6 +96,8 @@ import { resolveOpenCodeModel } from "./opencode/model-ref.js";
 import {
   PENTESTCODE_MODE_FEATURE_ID,
   pentestcodeFeatures,
+  pentestcodeEngagement,
+  PENTESTCODE_ENGAGEMENTS_DIR_ENV,
   pentestcodeMode,
   pentestcodeRunConfig,
 } from "./opencode/pentestcode-run.js";
@@ -1499,6 +1503,15 @@ export class OpenCodeAgentClient implements AgentClient {
               await this.fetchModelsFromClient(client, openCodeConfig.cwd),
             )
           : undefined;
+      // The engagement is fixed at creation time: scope, findings and captures are
+      // stored per engagement, so switching it mid-session would split one
+      // investigation across two records.
+      const engagement =
+        this.catalogProviderId === "pentestcode" ? pentestcodeEngagement(openCodeConfig) : null;
+      const createMetadata = {
+        ...(pentestcodeRun ? { pentestcodeRun, pentestcodeMode: pentestcodeRun.mode } : {}),
+        ...(engagement ? { pentestcodeEngagement: engagement } : {}),
+      };
       // Creating the first session for a directory is part of OpenCode coming up, so it
       // shares the server startup budget instead of a shorter one that fails agent
       // creation on contended cold starts.
@@ -1506,9 +1519,7 @@ export class OpenCodeAgentClient implements AgentClient {
         client.session.create({
           directory: openCodeConfig.cwd,
           ...(permission ? { permission } : {}),
-          ...(pentestcodeRun
-            ? { metadata: { pentestcodeRun, pentestcodeMode: pentestcodeRun.mode } }
-            : {}),
+          ...(Object.keys(createMetadata).length > 0 ? { metadata: createMetadata } : {}),
         } as Parameters<typeof client.session.create>[0]),
         OPENCODE_SERVER_STARTUP_TIMEOUT_MS,
         `OpenCode session.create timed out after ${Math.round(
@@ -1733,6 +1744,35 @@ export class OpenCodeAgentClient implements AgentClient {
     }
   }
 
+  /**
+   * Engagement directories under the configured parent. The parent is a per-host
+   * provider setting because the right location differs between a dedicated box
+   * and a workstation; it falls back to the provider's own default when unset.
+   */
+  private listEngagementNames(): string[] {
+    const configured = this.runtimeSettings?.env?.[PENTESTCODE_ENGAGEMENTS_DIR_ENV];
+    const home = this.resolveHomeDir();
+    let parent: string;
+    if (configured === undefined || configured.trim() === "") {
+      parent = nodePath.join(home, ".pentestcode", "engagements");
+    } else if (configured.startsWith("~")) {
+      parent = nodePath.join(home, configured.slice(1));
+    } else {
+      parent = configured;
+    }
+    try {
+      return nodeFs
+        .readdirSync(parent, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      // A parent that does not exist yet is normal on a fresh host; the user can
+      // still name a new engagement, which creates it.
+      return [];
+    }
+  }
+
   async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
     if (this.catalogProviderId === "pentestcode") {
       const catalog = await this.fetchCatalog({
@@ -1740,7 +1780,7 @@ export class OpenCodeAgentClient implements AgentClient {
         cwd: config.cwd,
         force: false,
       });
-      return pentestcodeFeatures(config, catalog.models);
+      return pentestcodeFeatures(config, catalog.models, this.listEngagementNames());
     }
     return [buildOpenCodeAutoAcceptFeature(this.assertConfig(config))];
   }
@@ -3525,9 +3565,9 @@ class OpenCodeAgentSession implements AgentSession {
     this.modelContextWindowsByModelKey = modelContextWindowsByModelKey;
     this.currentMode = normalizeOpenCodeModeId(config.modeId);
     this.autoAcceptEnabled =
-      !config.toolPolicy &&
-      isOpenCodeAutoAcceptEnabled(config) &&
-      !(this.catalogProviderId === "pentestcode" && pentestcodeMode(config) === "guided");
+      this.catalogProviderId === "pentestcode"
+        ? !config.toolPolicy && pentestcodeMode(config) === "bypass"
+        : !config.toolPolicy && isOpenCodeAutoAcceptEnabled(config);
     this.releaseBridge = releaseBridge ?? null;
     this.persistSession = persistSession;
     this.selectedModelContextWindowMaxTokens = this.resolveConfiguredModelContextWindowMaxTokens(
@@ -3612,11 +3652,10 @@ class OpenCodeAgentSession implements AgentSession {
 
   get features(): AgentFeature[] {
     if (this.catalogProviderId === "pentestcode") {
-      // Autonomy and auto-accept are independent: autonomy picks how much the
-      // lead plans for itself, auto-accept decides whether tool calls still
-      // need approval. Returning only autonomy dropped the permission toggle
-      // this provider otherwise has, even though the auto-accept state is
-      // already honoured below (and forced off in guided mode).
+      // Autonomy carries the permission level as its top step, so this provider
+      // has no separate auto-accept toggle. The engagement is deliberately absent
+      // here: it is chosen before the first message and stays fixed afterwards,
+      // because scope, findings and captures are written per engagement.
       return [
         {
           type: "select",
@@ -3627,9 +3666,9 @@ class OpenCodeAgentSession implements AgentSession {
             { id: "auto", label: "Auto" },
             { id: "free", label: "Free" },
             { id: "guided", label: "Guided" },
+            { id: "bypass", label: "Bypass" },
           ],
         },
-        buildOpenCodeAutoAcceptFeature(this.config),
       ];
     }
     return [buildOpenCodeAutoAcceptFeature(this.config)];
@@ -5071,8 +5110,9 @@ class OpenCodeAgentSession implements AgentSession {
           `Failed to set Pentestcode mode: ${toDiagnosticErrorMessage(response.error)}`,
         );
       this.config.featureValues = nextConfig.featureValues;
-      this.autoAcceptEnabled =
-        !this.config.toolPolicy && mode !== "guided" && isOpenCodeAutoAcceptEnabled(this.config);
+      // Bypass is the permission-free autonomy level, so it is the only mode
+      // that approves tool calls on its own.
+      this.autoAcceptEnabled = !this.config.toolPolicy && mode === "bypass";
       return;
     }
     if (featureId !== OPENCODE_AUTO_ACCEPT_FEATURE_ID) {

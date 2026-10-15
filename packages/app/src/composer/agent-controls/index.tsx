@@ -1327,13 +1327,19 @@ function DesktopFeatureItem({
     },
     [feature.id, onSetFeature],
   );
+  const [featureQuery, setFeatureQuery] = useState("");
   const comboboxOptions = useMemo<ComboboxOption[]>(
     () =>
       feature.type === "select"
-        ? feature.options.map((option) => ({ id: option.id, label: option.label }))
+        ? withCreateOption(
+            feature.options.map((option) => ({ id: option.id, label: option.label })),
+            feature,
+            featureQuery,
+          )
         : [],
-    [feature],
+    [feature, featureQuery],
   );
+  const allowsCreate = feature.type === "select" && feature.allowCreate === true;
 
   if (feature.type === "slots") {
     return (
@@ -1425,12 +1431,36 @@ function DesktopFeatureItem({
           onOpenChange={handleFeatureOpenChange}
           anchorRef={featureAnchorRef}
           desktopPlacement="top-start"
+          {...(allowsCreate
+            ? {
+                searchable: true,
+                placeholder: feature.type === "select" ? feature.createPlaceholder : undefined,
+                onSearchQueryChange: setFeatureQuery,
+              }
+            : {})}
         />
       </>
     );
   }
 
   return null;
+}
+
+/**
+ * Features that allow creation turn the search box into a name field: anything
+ * typed that is not already an option is offered as a new value. This keeps the
+ * generic select renderer in charge instead of adding a feature type.
+ */
+function withCreateOption(
+  options: ComboboxOption[],
+  feature: AgentFeature,
+  query: string,
+): ComboboxOption[] {
+  if (feature.type !== "select" || feature.allowCreate !== true) return options;
+  const name = query.trim();
+  if (name === "" || options.some((option) => option.id === name)) return options;
+  const label = feature.createLabel === undefined ? name : `${feature.createLabel}: ${name}`;
+  return [...options, { id: name, label }];
 }
 
 function SheetFeatureItem({
@@ -1467,15 +1497,21 @@ function SheetFeatureItem({
     },
     [feature.id, feature.type, onSetFeature],
   );
+  const [featureQuery, setFeatureQuery] = useState("");
   const comboboxOptions = useMemo<ComboboxOption[]>(() => {
     if (feature.type === "select") {
-      return feature.options.map((option) => ({ id: option.id, label: option.label }));
+      return withCreateOption(
+        feature.options.map((option) => ({ id: option.id, label: option.label })),
+        feature,
+        featureQuery,
+      );
     }
     return [
       { id: "true", label: t("agentControls.features.on") },
       { id: "false", label: t("agentControls.features.off") },
     ];
-  }, [feature, t]);
+  }, [feature, featureQuery, t]);
+  const allowsCreate = feature.type === "select" && feature.allowCreate === true;
 
   if (feature.type === "slots") {
     return (
@@ -1564,6 +1600,13 @@ function SheetFeatureItem({
           anchorRef={featureAnchorRef}
           presentation="push"
           header={sheetHeader}
+          {...(allowsCreate
+            ? {
+                searchable: true,
+                placeholder: feature.createPlaceholder,
+                onSearchQueryChange: setFeatureQuery,
+              }
+            : {})}
         />
       </>
     );

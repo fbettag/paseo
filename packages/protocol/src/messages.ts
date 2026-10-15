@@ -317,6 +317,9 @@ export const AgentFeatureSelectSchema = z.object({
   desktopTrigger: z.enum(["icon", "label"]).optional(),
   value: z.string().nullable(),
   options: z.array(AgentSelectOptionSchema),
+  allowCreate: z.boolean().optional(),
+  createLabel: z.string().optional(),
+  createPlaceholder: z.string().optional(),
 });
 
 export const AgentFeatureSlotValueSchema = z.object({
