@@ -5139,12 +5139,15 @@ class OpenCodeAgentSession implements AgentSession {
         ...(current.data as unknown as { metadata?: Record<string, unknown> }).metadata,
         pentestcodeMode: mode,
       };
-      // The generated SDK cannot carry metadata on this PATCH: it registers only
-      // title, permission and time as body fields. Passing the payload flat
-      // dropped metadata and sent no body ("Expected object, got undefined"),
-      // while an SDK path/query/body shape left the path placeholder
-      // unsubstituted ("%7BsessionID%7D"). The server does accept metadata, so
-      // the request goes out directly.
+      // Session metadata is how the Pentestcode fork carries its mode, and the
+      // SDK here is generated from upstream OpenCode, which has no such field:
+      // its session update registers only title, permission and time as body
+      // fields. So no SDK call can express this, and regenerating the fork's own
+      // SDK would not help either, since this package is the upstream one.
+      // Passing the payload flat dropped metadata and sent no body ("Expected
+      // object, got undefined"); an SDK path/query/body shape instead left the
+      // path placeholder unsubstituted ("%7BsessionID%7D"). The server accepts
+      // metadata, so the request goes out directly.
       if (this.server.url === "")
         throw new Error("Failed to set Pentestcode mode: no server URL for this session");
       const endpoint = `${this.server.url}/session/${encodeURIComponent(
