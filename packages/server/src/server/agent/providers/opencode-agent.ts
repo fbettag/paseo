@@ -1417,6 +1417,18 @@ interface OpenCodeAgentClientDeps {
   };
 }
 
+/**
+ * A directory counts as an engagement when it carries one of the files an
+ * engagement is defined by: Pentestcode's own state, or the scope document the
+ * imported methodology uses. The parent can be a broad location such as the home
+ * directory, where most directories are unrelated.
+ */
+function isEngagementDir(parent: string, name: string): boolean {
+  return ["state.json", "SCOPE.md"].some((marker) =>
+    nodeFs.existsSync(nodePath.join(parent, name, marker)),
+  );
+}
+
 type OpenCodeClientFactory = (options: { baseUrl: string; directory: string }) => OpencodeClient;
 
 function createSdkOpenCodeClient(options: { baseUrl: string; directory: string }): OpencodeClient {
@@ -1768,7 +1780,12 @@ export class OpenCodeAgentClient implements AgentClient {
     try {
       return nodeFs
         .readdirSync(parent, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.name.startsWith(".") &&
+            isEngagementDir(parent, entry.name),
+        )
         .map((entry) => entry.name)
         .sort((a, b) => a.localeCompare(b));
     } catch {
