@@ -150,6 +150,10 @@ export interface AgentFeatureSelect {
   desktopTrigger?: "icon" | "label";
   value: string | null;
   options: AgentSelectOption[];
+  /** Offer a free-text entry alongside the options so a new value can be named. */
+  allowCreate?: boolean;
+  createLabel?: string;
+  createPlaceholder?: string;
 }
 
 export interface AgentFeatureSlotValue {
