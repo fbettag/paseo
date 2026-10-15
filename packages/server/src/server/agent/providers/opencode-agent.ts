@@ -5139,18 +5139,25 @@ class OpenCodeAgentSession implements AgentSession {
         ...(current.data as unknown as { metadata?: Record<string, unknown> }).metadata,
         pentestcodeMode: mode,
       };
-      // session.update is a PATCH with a path parameter, so it needs the SDK's
-      // path/query/body shape. Passing the payload flat sent no body at all and
-      // the server rejected it with "Expected object, got undefined", which made
-      // every Pentestcode mode switch fail.
-      const response = await this.client.session.update({
-        path: { id: this.sessionId },
-        query: { directory: this.config.cwd },
-        body: { metadata },
-      } as unknown as Parameters<typeof this.client.session.update>[0]);
-      if (response.error)
+      // The generated SDK cannot carry metadata on this PATCH: it registers only
+      // title, permission and time as body fields. Passing the payload flat
+      // dropped metadata and sent no body ("Expected object, got undefined"),
+      // while an SDK path/query/body shape left the path placeholder
+      // unsubstituted ("%7BsessionID%7D"). The server does accept metadata, so
+      // the request goes out directly.
+      if (this.server.url === "")
+        throw new Error("Failed to set Pentestcode mode: no server URL for this session");
+      const endpoint = `${this.server.url}/session/${encodeURIComponent(
+        this.sessionId,
+      )}?directory=${encodeURIComponent(this.config.cwd)}`;
+      const response = await fetch(endpoint, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metadata }),
+      });
+      if (!response.ok)
         throw new Error(
-          `Failed to set Pentestcode mode: ${toDiagnosticErrorMessage(response.error)}`,
+          `Failed to set Pentestcode mode: ${response.status} ${await response.text()}`,
         );
       this.config.featureValues = nextConfig.featureValues;
       // Bypass is the permission-free autonomy level, so it is the only mode
