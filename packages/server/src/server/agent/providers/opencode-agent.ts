@@ -1735,11 +1735,12 @@ export class OpenCodeAgentClient implements AgentClient {
       }
 
       const client = this.createOpenCodeClient({ baseUrl: url, directory });
-      const [models, modes] = await Promise.all([
+      const [models, modes, defaultModel] = await Promise.all([
         this.fetchModelsFromClient(client, directory, context),
         this.fetchModesFromClient(client, directory, context),
+        this.fetchDefaultModelFromClient(client, directory),
       ]);
-      return { models, modes };
+      return { models, modes, defaultModel };
     } finally {
       await acquisition?.release();
     }
@@ -1959,6 +1960,23 @@ export class OpenCodeAgentClient implements AgentClient {
       return {
         diagnostic: formatProviderDiagnosticError("OpenCode", error),
       };
+    }
+  }
+
+  /**
+   * The server's own `model` setting. Treated as advisory: a server that cannot
+   * report it still yields a usable catalogue, just without a declared default.
+   */
+  private async fetchDefaultModelFromClient(
+    client: OpencodeClient,
+    directory: string,
+  ): Promise<string | undefined> {
+    try {
+      const response = await client.config.get({ directory });
+      const configured = response.data?.model;
+      return typeof configured === "string" && configured.length > 0 ? configured : undefined;
+    } catch {
+      return undefined;
     }
   }
 

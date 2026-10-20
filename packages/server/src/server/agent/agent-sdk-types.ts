@@ -767,6 +767,13 @@ export interface ProviderCatalog {
   models: AgentModelDefinition[];
   modes: AgentMode[];
   defaultModeId?: string | null;
+  /**
+   * Model a new session should use when the caller names none. Without this the
+   * resolver falls back to the first catalogue entry, which is arbitrary: an
+   * OpenCode server serving several providers can lead with one its upstream
+   * rejects for agent-sized requests.
+   */
+  defaultModel?: string;
 }
 
 export interface ResolveAgentDefaultModeInput {

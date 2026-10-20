@@ -5300,6 +5300,7 @@ export class AgentManager {
         cwd: config.cwd,
         force: false,
       });
+      if (catalog.defaultModel) return catalog.defaultModel;
       return (catalog.models.find((model) => model.isDefault) ?? catalog.models[0])?.id;
     } catch {
       // Provider may not support model listing — leave model undefined.
