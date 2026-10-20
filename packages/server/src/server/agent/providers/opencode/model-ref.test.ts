@@ -41,6 +41,15 @@ describe("resolveOpenCodeModel", () => {
       providerID: "orcarouter",
       modelID: "kimi/kimi-k3",
     });
+    // hunt wraps a plain OpenCode server that serves zai and orcarouter side by side.
+    expect(resolveOpenCodeModel("zai/glm-5.3", "hunt")).toEqual({
+      providerID: "zai",
+      modelID: "glm-5.3",
+    });
+    expect(resolveOpenCodeModel("hunt/orcarouter/deepseek/deepseek-v4.1-flash", "hunt")).toEqual({
+      providerID: "orcarouter",
+      modelID: "deepseek/deepseek-v4.1-flash",
+    });
   });
 
   it("unwraps a direct picker id without doubling the provider", () => {

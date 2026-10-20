@@ -6,7 +6,7 @@
 // decide. Single-provider catalogs such as orcarouter and blackbit are the
 // opposite case: there the catalog id *is* the providerID, and a second
 // segment is a vendor path within that provider, not a provider of its own.
-const MULTI_PROVIDER_FORKS = new Set(["pentestcode"]);
+const MULTI_PROVIDER_FORKS = new Set(["pentestcode", "hunt"]);
 
 export function resolveOpenCodeModel(
   model: string | undefined,
