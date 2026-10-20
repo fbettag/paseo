@@ -30,7 +30,7 @@ async function spawnChildAgent(
     cwd: input.cwd,
     mode: input.mode,
     config: input.systemPrompt ? { systemPrompt: input.systemPrompt } : undefined,
-    background: true,
+    detached: true,
     notifyOnFinish: true,
     unattended: true,
     promptFailure: "throw",

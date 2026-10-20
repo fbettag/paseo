@@ -280,7 +280,6 @@ interface CodexAppServerClientLike {
 
 interface CodexAppServerAgentDeps {
   environment?: Record<string, string>;
-  jevAdmit?: CodexJevAdmit;
   jevCompact?: AgentLaunchContext["jevCompact"];
   workspaceGitService?: Pick<WorkspaceGitService, "resolveRepoRoot">;
   customProvider?: {

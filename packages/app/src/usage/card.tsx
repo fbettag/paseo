@@ -32,6 +32,7 @@ function statusText(report: UsageReport, t: TFunction): string | null {
 }
 
 function planBadgeVariant(report: UsageReport): "error" | "warning" | "muted" {
+  if (report.status !== "available") return "muted";
   let warning = false;
   for (const window of report.windows) {
     if (window.tone === "danger") return "error";

@@ -6,11 +6,13 @@ import { z } from "zod";
 import {
   hashAccountKey,
   toneFromUsedPct,
-  unavailableUsage,
+  unavailable,
   windowFromUsedPct,
+  type UsageAccount,
   type UsageBalance,
   type UsageDetail,
   type UsageReport,
+  type UsageScope,
   type UsageWindow,
 } from "@getpaseo/plugin/server/usage";
 
@@ -262,7 +264,7 @@ export async function fetchUsage(
 ): Promise<UsageReport> {
   void input;
   const token = await readOrcaKey(homeDir);
-  if (!token) return unavailableUsage();
+  if (!token) return unavailable({ kind: "rejected", status: 401 });
 
   const authHeaders = {
     Authorization: `Bearer ${token}`,
@@ -282,7 +284,11 @@ export async function fetchUsage(
     })),
   ]);
 
-  if (isAuthFailure(usageRes.status) || isAuthFailure(subRes.status)) return unavailableUsage();
+  if (isAuthFailure(usageRes.status) || isAuthFailure(subRes.status))
+    return unavailable({
+      kind: "rejected",
+      status: isAuthFailure(usageRes.status) ? usageRes.status : subRes.status,
+    });
   return buildOrcaUsageReport({
     usageBody: usageRes.body,
     subscriptionBody: subRes.body,
@@ -354,9 +360,12 @@ function freeDetails(
   return details;
 }
 
-export async function identify(_input?: UsageInput, homeDir = homedir()) {
+export async function discover(scope: UsageScope): Promise<UsageAccount[]> {
+  const homeDir =
+    scope.kind === "session" ? scope.env.HOME || scope.env.USERPROFILE || homedir() : homedir();
   const key = await readOrcaKey(homeDir);
-  return key ? { key: hashAccountKey(key) } : null;
+  if (!key) return [];
+  return [{ key: hashAccountKey(key), label: "Orca", input: {} }];
 }
 
 function planLabelFor(status: FreeStatus, hasPayment: boolean): string {

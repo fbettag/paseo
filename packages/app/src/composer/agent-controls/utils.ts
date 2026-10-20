@@ -41,6 +41,8 @@ export function getFeatureTooltip(feature: Pick<AgentFeature, "label" | "tooltip
 
 export function isFeatureActive(feature: AgentFeature): boolean {
   if (feature.type === "toggle") return feature.value;
+  if (feature.type === "stepper") return false;
+  if (feature.type === "slots") return feature.value.length > 0;
   const selectedOption = feature.options.find((option) => option.id === feature.value);
   return selectedOption !== undefined && !selectedOption.isDefault;
 }

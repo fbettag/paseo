@@ -32,7 +32,7 @@ import type {
 import type { AgentMetadata } from "@getpaseo/protocol/agent-types";
 import { mapJevPermissionMode } from "../../jev/permission-mode.js";
 import type { EnabledModel } from "../../jev/model-router.js";
-import { isSystemInjectedEnvelope } from "../agent-prompt.js";
+import { isSystemInjectedEnvelope } from "../agent-messages/index.js";
 import type { ChildAgentHandle, JevRouterPorts } from "./jev-agent.js";
 import { JEV_PROVIDER_ID } from "./jev-agent.js";
 import {
