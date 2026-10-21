@@ -95,6 +95,9 @@ buildNpmPackage rec {
     # daemon closure by scripts/trace-daemon.mjs.
     npm rebuild node-pty
 
+    # npmRebuildFlags skips lifecycle scripts, including our required dependency patches.
+    npm run postinstall
+
     # Build all server packages in dependency order (defined in package.json)
     npm run build:server
     npm run build:daemon-web-ui
