@@ -100,6 +100,9 @@ buildNpmPackage {
     # Native deps (terminal emulation; libuv-linked on Linux)
     npm rebuild node-pty
 
+    # npmRebuildFlags skips lifecycle scripts, including our required dependency patches.
+    npm run postinstall
+
     # Server workspaces (highlight + relay + protocol + client + server + cli)
     npm run build:server
 
