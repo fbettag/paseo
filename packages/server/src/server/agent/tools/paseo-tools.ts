@@ -117,6 +117,8 @@ import {
 } from "./types.js";
 import type { ProviderPaseoToolsPolicy } from "@getpaseo/protocol/provider-config";
 import { isPaseoToolEnabled } from "../paseo-tool-policy.js";
+import { createJevClientFromEnv } from "../../jev/client.js";
+import { formatJevGrepResult, searchWithJev } from "../../jev/grep.js";
 
 export interface PaseoToolHostDependencies {
   agentMessages?: () => AgentMessageDelivery;
@@ -1378,6 +1380,43 @@ function createToolCatalog(
       callerAgentId,
       resolveCallerAgent,
     });
+  }
+
+  const jevClient = createJevClientFromEnv(childLogger);
+  if (jevClient) {
+    registerTool(
+      "jevgrep",
+      {
+        title: "Jevgrep",
+        description:
+          "Find source by asking what it does. Use this instead of Grep or rg when you do not know which file holds the behavior. Pass a repository question. Keep Grep for an exact symbol or regex. Returns ranked paths and verbatim excerpts.",
+        inputSchema: {
+          query: z
+            .string()
+            .trim()
+            .min(1)
+            .max(2_000)
+            .describe("Behavior question, for example where authentication is checked."),
+          root: z
+            .string()
+            .trim()
+            .min(1)
+            .optional()
+            .describe("Folder to search. Defaults to the agent working directory."),
+        },
+      },
+      async ({ query, root }, context) => {
+        const result = await searchWithJev({
+          query,
+          root: resolveScopedCwd(root),
+          ask: jevClient,
+          signal: context?.signal,
+        });
+        return {
+          content: [{ type: "text", text: formatJevGrepResult(result) }],
+        };
+      },
+    );
   }
 
   registerTool(

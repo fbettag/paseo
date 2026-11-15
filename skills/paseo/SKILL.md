@@ -5,6 +5,8 @@ description: Paseo reference for managing hosts, projects, workspaces, workspace
 
 Paseo is a remote daemon that manages coding agents, terminals. Control it through MCP tools or the CLI.
 
+When the `jevgrep` tool is available, use it instead of Grep or `rg` to find unfamiliar behavior. Keep Grep for an exact symbol. See the **jevgrep** skill.
+
 ## Connected hosts
 
 Call `list_hosts` to discover the calling daemon (`self`) and its registered destinations (`hosts`). Use a destination's `serverId` for tool calls; labels are display names.
